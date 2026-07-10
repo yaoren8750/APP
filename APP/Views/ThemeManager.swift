@@ -122,14 +122,11 @@ public struct ModernDarkColors {
 }
 
 enum ThemeMode: String, CaseIterable {
-    case system
     case light
     case dark
     
     var displayName: String {
         switch self {
-        case .system:
-            return "auto".localized
         case .light:
             return "light_mode".localized
         case .dark:
@@ -162,17 +159,6 @@ struct FloatingThemeSelector: View {
                     VStack(spacing: Spacing.lg) {
 
                         HStack(spacing: Spacing.xl) {
-
-                            FloatingThemeOption(
-                                mode: .system,
-                                isSelected: themeManager.selectedTheme == .system,
-                                action: {
-                                    themeManager.selectedTheme = .system
-                                    withAnimation(.easeInOut(duration: 0.3)) {
-                                        isPresented = false
-                                    }
-                                }
-                            )
 
                             FloatingThemeOption(
                                 mode: .light,
@@ -235,21 +221,6 @@ struct FloatingThemeOption: View {
                                 .stroke(isSelected ? ThemeManager.shared.accentColor : Color.clear, lineWidth: 4)
                         )
                         .shadow(color: isSelected ? ThemeManager.shared.accentColor.opacity(0.4) : Color.black.opacity(0.15), radius: isSelected ? 12 : 6, x: 0, y: 4)
-
-                    if mode == .system {
-                        HStack(spacing: 0) {
-                            Color.white
-                                .frame(width: cardSize.width / 2)
-                            ModernDarkColors.surfacePrimary
-                                .frame(width: cardSize.width / 2)
-                        }
-                        .frame(width: cardSize.width, height: cardSize.height)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(isSelected ? ThemeManager.shared.accentColor : Color.clear, lineWidth: 4)
-                        )
-                    }
 
                     VStack(spacing: 8) {
 
@@ -339,8 +310,6 @@ struct FloatingThemeOption: View {
 
     private var themeBackgroundColor: Color {
         switch mode {
-        case .system:
-            return UITraitCollection.current.userInterfaceStyle == .dark ? ModernDarkColors.surfacePrimary : Color.white
         case .light:
             return Color.white
         case .dark:
@@ -350,8 +319,6 @@ struct FloatingThemeOption: View {
 
     private var themeTextColor: Color {
         switch mode {
-        case .system:
-            return UITraitCollection.current.userInterfaceStyle == .dark ? ModernDarkColors.textPrimary : Color.black
         case .light:
             return Color.black
         case .dark:
@@ -361,8 +328,6 @@ struct FloatingThemeOption: View {
 
     private var themeSecondaryColor: Color {
         switch mode {
-        case .system:
-            return UITraitCollection.current.userInterfaceStyle == .dark ? ModernDarkColors.textSecondary : Color.gray
         case .light:
             return Color.gray
         case .dark:
@@ -372,8 +337,6 @@ struct FloatingThemeOption: View {
 
     private var themeSearchBarColor: Color {
         switch mode {
-        case .system:
-            return UITraitCollection.current.userInterfaceStyle == .dark ? ModernDarkColors.surfaceSecondary : Color.gray.opacity(0.1)
         case .light:
             return Color.gray.opacity(0.1)
         case .dark:
