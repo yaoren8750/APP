@@ -909,6 +909,7 @@ class AppleIDAuthenticator: @unchecked Sendable {
             "X-Apple-ID-Session-Id": "session_id",
             "X-Apple-Auth-Attributes": "auth_attributes",
             "X-Apple-Session-Token": "session_token",
+            "X-Apple-Repair-Session-Token": "repair_session_token",
             "X-Apple-TwoSV-Trust-Token": "trust_token",
             "X-Apple-TwoSV-Trust-Eligible": "trust_eligible",
             "X-Apple-OAuth-Grant-Code": "grant_code",
@@ -1079,6 +1080,47 @@ class AppleIDAuthenticator: @unchecked Sendable {
         let completeBody = String(data: completeResponseData, encoding: .utf8) ?? ""
         print("🔐 [SRP认证] complete 响应: \(completeBody.prefix(300))")
 
+        let isSuccessStatus = (completeHttpResponse.statusCode == 200 || completeHttpResponse.statusCode == 204)
+
+        let authTypeSa: Bool = {
+            if completeHttpResponse.statusCode == 412,
+               let json = try? JSONSerialization.jsonObject(with: completeResponseData) as? [String: Any],
+               let authType = json["authType"] as? String,
+               authType.lowercased() == "sa" {
+                return true
+            }
+            return false
+        }()
+
+        if authTypeSa {
+            print("🔐 [SRP认证] 检测到 authType=sa（简单认证，无需2FA），获取 session token")
+            print("🔐 [SRP认证] complete 响应头: \(completeHttpResponse.allHeaderFields)")
+            
+            if sessionData["session_token"] == nil {
+                print("🔐 [SRP认证] authType=sa 时无 session_token，尝试调用 trust 接口获取")
+                do {
+                    let trustUrl = URL(string: "\(authEndpoint)/2sv/trust")!
+                    let (_, trustResponse) = try await request(url: trustUrl, method: "GET", headers: getAuthHeaders())
+                    print("🔐 [SRP认证] trust 接口状态码: \(trustResponse.statusCode)")
+                    if sessionData["session_token"] != nil {
+                        print("✅ [SRP认证] 成功获取 session_token")
+                    } else {
+                        print("⚠️ [SRP认证] trust 接口未返回 session_token，尝试使用 repair_session_token")
+                        if let repairToken = sessionData["repair_session_token"] {
+                            sessionData["session_token"] = repairToken
+                            print("✅ [SRP认证] 使用 repair_session_token 作为 session_token")
+                        }
+                    }
+                } catch {
+                    print("⚠️ [SRP认证] trust 接口调用失败: \(error.localizedDescription)")
+                    if let repairToken = sessionData["repair_session_token"] {
+                        sessionData["session_token"] = repairToken
+                        print("✅ [SRP认证] 使用 repair_session_token 作为 session_token")
+                    }
+                }
+            }
+        }
+
         if completeHttpResponse.statusCode == 409 {
             print("🔐 [SRP认证] 需要 2FA (HTTP 409)")
 
@@ -1104,7 +1146,7 @@ class AppleIDAuthenticator: @unchecked Sendable {
             }
         }
 
-        if completeHttpResponse.statusCode != 200 && completeHttpResponse.statusCode != 204 {
+        if !isSuccessStatus && !authTypeSa {
             let body = String(data: completeResponseData, encoding: .utf8) ?? ""
             print("❌ [SRP认证] complete 失败: \(completeHttpResponse.statusCode) \(body.prefix(300))")
             if let parsedError = parseServiceErrors(from: completeResponseData) {
