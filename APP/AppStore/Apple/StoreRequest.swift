@@ -453,6 +453,7 @@ public enum StoreError: Error, LocalizedError, Equatable {
     case lockedAccount
     case keychainError
     case userInteractionRequired
+    case invalidVerificationCode
 
     public var errorDescription: String? {
         switch self {
@@ -484,6 +485,8 @@ public enum StoreError: Error, LocalizedError, Equatable {
             return "Keychain error occurred"
         case .userInteractionRequired:
             return "需要在 App Store 完成一次身份验证/获取"
+        case .invalidVerificationCode:
+            return "验证码错误，请检查后重试"
         case .unknownError:
             return "Unknown error occurred"
         }
@@ -501,6 +504,8 @@ public enum StoreError: Error, LocalizedError, Equatable {
             return .codeRequired
         case "lockedAccount":
             return .lockedAccount
+        case "invalidVerificationCode":
+            return .invalidVerificationCode
         default:
             return .unknownError
         }
@@ -515,7 +520,12 @@ public enum StoreError: Error, LocalizedError, Equatable {
              (.genericError, .genericError),
              (.invalidItem, .invalidItem),
              (.invalidLicense, .invalidLicense),
-             (.unknownError, .unknownError):
+             (.unknownError, .unknownError),
+             (.codeRequired, .codeRequired),
+             (.lockedAccount, .lockedAccount),
+             (.keychainError, .keychainError),
+             (.userInteractionRequired, .userInteractionRequired),
+             (.invalidVerificationCode, .invalidVerificationCode):
             return true
         case (.networkError(let lhsError), .networkError(let rhsError)):
             return lhsError.localizedDescription == rhsError.localizedDescription

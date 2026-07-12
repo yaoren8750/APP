@@ -433,11 +433,9 @@ class SRPClient {
         let passwordHash = SRPClient.sha256(Data(password.utf8))
         let passwordDigest: Data
         if `protocol` == "s2k_fo" {
-
             let hexString = passwordHash.map { String(format: "%02x", $0) }.joined()
             passwordDigest = Data(hexString.utf8)
         } else {
-
             passwordDigest = passwordHash
         }
         let passwordBytes = SRPClient.pbkdf2(password: passwordDigest, salt: salt, iterations: iterations, keyLength: 32)
@@ -462,7 +460,7 @@ class SRPClient {
         }
         let v = BigUInt(vData)
 
-        let baseVal = (BigUInt(serverB) - (k * v % SRPClient.N) + SRPClient.N) % SRPClient.N
+        let baseVal = (BigUInt(serverB) + SRPClient.N - (k * v % SRPClient.N)) % SRPClient.N
         let exponent = BigUInt(aDataBase) + u * x
 
         let baseB64 = baseVal.serialize(paddedTo: 256).base64EncodedString()
@@ -835,6 +833,30 @@ class AppleIDAuthenticator: @unchecked Sendable {
         return headers
     }
 
+    private func parseServiceErrors(from data: Data) -> StoreError? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let serviceErrors = json["serviceErrors"] as? [[String: Any]],
+              let firstError = serviceErrors.first,
+              let codeString = firstError["code"] as? String,
+              let code = Int(codeString) else {
+            return nil
+        }
+
+        let message = (firstError["message"] as? String) ?? ""
+        print("⚠️ [SRP认证] 服务器错误码: \(code), 消息: \(message)")
+
+        switch code {
+        case -20209, -20210:
+            return .lockedAccount
+        case -20207, -20206, -20204, -20203, -20101, -20100:
+            return .invalidCredentials
+        case -20201, -20200:
+            return .accountNotFound
+        default:
+            return nil
+        }
+    }
+
     private func request(url: URL, method: String = "POST", headers: [String: String], body: Any? = nil) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -976,6 +998,9 @@ class AppleIDAuthenticator: @unchecked Sendable {
         guard initHttpResponse.statusCode == 200 else {
             let body = String(data: initResponseData, encoding: .utf8) ?? ""
             print("❌ [SRP认证] init 失败: \(initHttpResponse.statusCode) \(body.prefix(300))")
+            if let parsedError = parseServiceErrors(from: initResponseData) {
+                throw parsedError
+            }
             throw StoreError.authenticationFailed
         }
 
@@ -993,6 +1018,8 @@ class AppleIDAuthenticator: @unchecked Sendable {
             throw StoreError.invalidResponse
         }
 
+        print("🔐 [SRP认证] init 响应 c 类型: \(type(of: c)), 值: \(c)")
+
         guard let saltData = SRPClient.b64Decode(saltBase64),
               let bData = SRPClient.b64Decode(bBase64) else {
             print("❌ [SRP认证] Base64 解码失败")
@@ -1000,8 +1027,6 @@ class AppleIDAuthenticator: @unchecked Sendable {
         }
 
         print("🔐 [SRP认证] init 成功: salt=\(saltData.count)B, B=\(bData.count)B, iter=\(iteration), proto=\(protocolStr)")
-
-        print("🔐 [SRP认证] 步骤2: 计算 M1/M2 (通过 Python 子进程)")
 
         let (m1, m2): (Data, Data)
         do {
@@ -1031,6 +1056,11 @@ class AppleIDAuthenticator: @unchecked Sendable {
 
         if let trustToken = sessionData["trust_token"] {
             completeData["trustTokens"] = [trustToken]
+        }
+
+        if let completeJsonData = try? JSONSerialization.data(withJSONObject: completeData),
+           let completeJsonStr = String(data: completeJsonData, encoding: .utf8) {
+            print("🔐 [SRP认证] complete 请求体: \(completeJsonStr.prefix(500))")
         }
 
         print("🔐 [SRP认证] 步骤2: POST /signin/complete")
@@ -1067,6 +1097,9 @@ class AppleIDAuthenticator: @unchecked Sendable {
             if retryResponse.statusCode != 200 && retryResponse.statusCode != 204 {
                 let body = String(data: retryData, encoding: .utf8) ?? ""
                 print("❌ [SRP认证] 重试 complete 失败: \(retryResponse.statusCode) \(body.prefix(300))")
+                if let parsedError = parseServiceErrors(from: retryData) {
+                    throw parsedError
+                }
                 throw StoreError.authenticationFailed
             }
         }
@@ -1074,6 +1107,9 @@ class AppleIDAuthenticator: @unchecked Sendable {
         if completeHttpResponse.statusCode != 200 && completeHttpResponse.statusCode != 204 {
             let body = String(data: completeResponseData, encoding: .utf8) ?? ""
             print("❌ [SRP认证] complete 失败: \(completeHttpResponse.statusCode) \(body.prefix(300))")
+            if let parsedError = parseServiceErrors(from: completeResponseData) {
+                throw parsedError
+            }
             throw StoreError.authenticationFailed
         }
 
@@ -1115,11 +1151,31 @@ class AppleIDAuthenticator: @unchecked Sendable {
         let url = URL(string: "\(authEndpoint)/verify/trusteddevice/securitycode")!
 
         do {
-            let (_, httpResponse) = try await request(url: url, headers: headers, body: data)
-            if httpResponse.statusCode == 204 || httpResponse.statusCode == 200 {
-                print("✅ [2FA] 验证码验证成功")
+            let (responseData, httpResponse) = try await request(url: url, headers: headers, body: data)
+            let bodyStr = String(data: responseData, encoding: .utf8) ?? ""
+            print("🔐 [2FA] securitycode 响应: \(httpResponse.statusCode) | \(bodyStr)")
+            
+            let successStatus = (httpResponse.statusCode == 204 || httpResponse.statusCode == 200)
+            
+            let isValidCode: Bool = {
+                if let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                   let securityCode = json["securityCode"] as? [String: Any],
+                   let valid = securityCode["valid"] as? Bool {
+                    return valid
+                }
+                return false
+            }()
+            
+            if successStatus || (httpResponse.statusCode == 409 && isValidCode) {
+                print("✅ [2FA] 验证码验证成功 (状态码: \(httpResponse.statusCode))")
             } else {
                 print("❌ [2FA] 验证码验证失败: \(httpResponse.statusCode)")
+                if let parsedError = parseServiceErrors(from: responseData) {
+                    throw parsedError
+                }
+                if httpResponse.statusCode == 409 {
+                    throw StoreError.invalidVerificationCode
+                }
                 throw StoreError.invalidCredentials
             }
         } catch let error as StoreError {
@@ -1166,7 +1222,30 @@ class AppleIDAuthenticator: @unchecked Sendable {
             "Content-Type": "application/json",
             "Origin": "https://www.icloud.com",
         ]
-        let (data, httpResponse) = try await request(url: loginUrl, headers: headers, body: loginData)
+        var (data, httpResponse) = try await request(url: loginUrl, headers: headers, body: loginData)
+
+        let shouldRetryWithChinaMainland: Bool = {
+            if httpResponse.statusCode == 302 || httpResponse.statusCode == 301 {
+                if let redirectJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let domainToUse = redirectJson["domainToUse"] as? String {
+                    let needsChinaMainland = domainToUse.lowercased().contains("icloud.com.cn")
+                    return needsChinaMainland != isChinaMainland && needsChinaMainland
+                }
+            }
+            return false
+        }()
+
+        if shouldRetryWithChinaMainland {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            print("🔄 [Token认证] accountLogin 收到重定向 (\(httpResponse.statusCode)): \(body.prefix(200))")
+            print("🌐 [Token认证] 服务器建议使用中国大陆域名，切换端点重试")
+
+            let newEndpoint = AppleAuthEndpoint.setupEndpoint(isChinaMainland: true)
+            let newUrl = URL(string: "\(newEndpoint)/accountLogin")!
+            var newHeaders = headers
+            newHeaders["Origin"] = "https://www.icloud.com.cn"
+            (data, httpResponse) = try await request(url: newUrl, headers: newHeaders, body: loginData)
+        }
 
         guard httpResponse.statusCode == 200 else {
             let body = String(data: data, encoding: .utf8) ?? ""
@@ -1181,6 +1260,7 @@ class AppleIDAuthenticator: @unchecked Sendable {
         print("🔐 [Token认证] accountLogin 成功，响应键: \(Array(json.keys).sorted())")
 
         let dsInfo = json["dsInfo"] as? [String: Any] ?? [:]
+        print("🔐 [Token认证] dsInfo: \(dsInfo)")
         let hsaVersion = dsInfo["hsaVersion"] as? Int ?? 0
         let hsaChallengeRequired = json["hsaChallengeRequired"] as? Bool ?? false
         let hsaTrustedBrowser = json["hsaTrustedBrowser"] as? Bool ?? false
@@ -1190,11 +1270,21 @@ class AppleIDAuthenticator: @unchecked Sendable {
             throw StoreError.codeRequired
         }
 
-        let dsPersonId = dsInfo["dsid"] as? Int ?? 0
+        let dsPersonId: String
+        if let dsidInt = dsInfo["dsid"] as? Int {
+            dsPersonId = String(dsidInt)
+        } else if let dsidStr = dsInfo["dsid"] as? String {
+            dsPersonId = dsidStr
+        } else {
+            dsPersonId = ""
+        }
+        print("🔐 [Token认证] DSID: \(dsPersonId) (类型: \(type(of: dsInfo["dsid"])) )")
+
+        let actualIsChinaMainland = (httpResponse.url?.host?.contains("icloud.com.cn") ?? false) || isChinaMainland
 
         let storeResponse = try await getStoreCredentials(
-            dsPersonId: String(dsPersonId),
-            isChinaMainland: isChinaMainland
+            dsPersonId: dsPersonId,
+            isChinaMainland: actualIsChinaMainland
         )
 
         return storeResponse
