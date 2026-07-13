@@ -1160,8 +1160,6 @@ struct DownloadView: SwiftUI.View {
 struct DownloadCardView: SwiftUI.View {
     @ObservedObject var request: DownloadRequest
     @EnvironmentObject var themeManager: ThemeManager
-    @StateObject private var globalInstallManager = GlobalInstallationManager.shared
-    @StateObject private var installManager = AppInstallationManager.shared
 
 
     @State private var showDetailView = false
@@ -1174,16 +1172,7 @@ struct DownloadCardView: SwiftUI.View {
 
 
     private var buttonGradientColors: [Color] {
-        if let installState = installManager.installingRequests[request.id] {
-            switch installState.status {
-            case .completed:
-                return [Color.green, Color.green.opacity(0.8)]
-            case .failed, .timeout, .cancelled:
-                return [Color.red, Color.red.opacity(0.8)]
-            default:
-                return [Color.gray, Color.gray.opacity(0.8)]
-            }
-        } else if globalInstallManager.isAnyInstalling && globalInstallManager.currentInstallingRequestId != request.id {
+        if isInstalling {
             return [Color.gray, Color.gray.opacity(0.8)]
         } else {
             return [Color.green, Color.green.opacity(0.8)]
@@ -1191,34 +1180,11 @@ struct DownloadCardView: SwiftUI.View {
     }
 
     private var buttonShadowColor: Color {
-        if let installState = installManager.installingRequests[request.id] {
-            switch installState.status {
-            case .completed:
-                return Color.green.opacity(0.3)
-            case .failed, .timeout, .cancelled:
-                return Color.red.opacity(0.3)
-            default:
-                return Color.gray.opacity(0.3)
-            }
-        } else if globalInstallManager.isAnyInstalling && globalInstallManager.currentInstallingRequestId != request.id {
+        if isInstalling {
             return Color.gray.opacity(0.3)
         } else {
             return Color.green.opacity(0.3)
         }
-    }
-
-    private var isButtonDisabled: Bool {
-        if let installState = installManager.installingRequests[request.id] {
-            switch installState.status {
-            case .preparing, .prompting, .installing:
-                return true
-            case .completed:
-                return false
-            case .failed, .timeout, .cancelled:
-                return false
-            }
-        }
-        return globalInstallManager.isAnyInstalling && globalInstallManager.currentInstallingRequestId != request.id
     }
 
     var body: some SwiftUI.View {
@@ -1313,7 +1279,6 @@ struct DownloadCardView: SwiftUI.View {
 
 
                 if isInstalling {
-                    installationProgressView
                 }
 
 
@@ -1408,69 +1373,19 @@ struct DownloadCardView: SwiftUI.View {
                                 startInstallation(for: request)
                             }) {
                                 HStack(spacing: 6) {
-
-                                    if let installState = installManager.installingRequests[request.id] {
-                                        switch installState.status {
-                                        case .preparing, .prompting:
-                                            ProgressView()
-                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                .scaleEffect(0.8)
-                                        case .installing:
-                                            ProgressView()
-                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                .scaleEffect(0.8)
-                                        case .completed:
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .font(.system(size: 16, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        case .failed, .timeout, .cancelled:
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .font(.system(size: 16, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        }
-                                    } else if globalInstallManager.isAnyInstalling && globalInstallManager.currentInstallingRequestId != request.id {
-                                        Image(systemName: "clock.fill")
-                                            .font(.system(size: 16, weight: .semibold))
-                                            .foregroundColor(.white.opacity(0.6))
+                                    if isInstalling {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(0.8)
                                     } else {
                                         Image(systemName: "arrow.up.circle.fill")
                                             .font(.system(size: 16, weight: .semibold))
                                             .foregroundColor(.white)
                                     }
 
-
-                                    if let installState = installManager.installingRequests[request.id] {
-                                        switch installState.status {
-                                        case .preparing:
-                                            Text("preparing".localized)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        case .prompting:
-                                            Text("waiting_confirm".localized)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        case .installing:
-                                            Text("installing".localized)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        case .completed:
-                                            Text("install_completed".localized)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        case .failed, .timeout, .cancelled:
-                                            Text("install_failed".localized)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        }
-                                    } else if globalInstallManager.isAnyInstalling && globalInstallManager.currentInstallingRequestId != request.id {
-                                        Text("waiting".localized)
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(.white.opacity(0.6))
-                                    } else {
-                                        Text("start_install".localized)
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(.white)
-                                    }
+                                    Text(isInstalling ? "preparing".localized : "start_install".localized)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(.white)
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.horizontal, 16)
@@ -1486,7 +1401,7 @@ struct DownloadCardView: SwiftUI.View {
                                 .shadow(color: buttonShadowColor, radius: 4, x: 0, y: 2)
                             }
                             .buttonStyle(PlainButtonStyle())
-                            .disabled(isButtonDisabled)
+                            .disabled(isInstalling)
                         }
                     }
 
@@ -1501,16 +1416,6 @@ struct DownloadCardView: SwiftUI.View {
         }
         .onTapGesture {
             handleCardTap()
-        }
-        .onChange(of: installManager.installingRequests[request.id]?.status) { newStatus in
-            if let status = newStatus {
-                updateInstallationUI(with: status)
-            }
-        }
-        .onChange(of: installManager.installingRequests[request.id]?.progress) { newProgress in
-            if let progress = newProgress {
-                installationProgress = progress
-            }
         }
     }
 
@@ -1647,60 +1552,6 @@ struct DownloadCardView: SwiftUI.View {
     }
 
 
-    private var installationProgressView: some SwiftUI.View {
-        VStack(spacing: 8) {
-            HStack {
-                Label("installing".localized, systemImage: "arrow.up.circle")
-                    .font(.headline)
-                    .foregroundColor(.green)
-
-                Spacer()
-
-                if let installState = installManager.installingRequests[request.id] {
-                    switch installState.status {
-                    case .completed:
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.title2)
-                    case .failed, .timeout, .cancelled:
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
-                            .font(.title2)
-                    default:
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .green))
-                            .scaleEffect(1.0)
-                    }
-                } else {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .green))
-                        .scaleEffect(1.0)
-                }
-            }
-
-            Text(installationMessage)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let installState = installManager.installingRequests[request.id] {
-                if installState.status == .installing {
-                    HStack(spacing: 4) {
-                        Image(systemName: "info.circle")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text("install_background_hint".localized)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-        .padding(.horizontal, 4)
-    }
-
-
     private func getProgressLabel() -> String {
         switch request.runtime.status {
         case DownloadStatus.waiting:
@@ -1827,13 +1678,6 @@ struct DownloadCardView: SwiftUI.View {
         installationProgress = 0.0
         installationMessage = "preparing_install".localized
 
-        let canStart = globalInstallManager.startInstallation(for: request.id)
-        guard canStart else {
-            installationMessage = "install_in_progress".localized
-            isInstalling = false
-            return
-        }
-
         let backgroundTaskID = UIApplication.shared.beginBackgroundTask {
             NSLog("⏰ [DownloadView] 后台任务即将过期")
         }
@@ -1912,59 +1756,72 @@ struct DownloadCardView: SwiftUI.View {
                     installationProgress = 0.8
                     installationMessage = "opening_install_page".localized
 
-                    NSLog("🌐 [DownloadView] 使用Safari打开安装页面")
+                    NSLog("🌐 [DownloadView] 使用 itms-services 唤起系统安装")
 
-                    let installURL = URL(string: "http://127.0.0.1:\(port)/install")!
-
-                    installManager.startInstallation(
-                        request: request,
-                        port: port,
-                        bundleIdentifier: request.bundleIdentifier
-                    )
-
-                    let safariVC = SFSafariViewController(url: installURL)
-                    safariVC.modalPresentationStyle = .pageSheet
-
-
-                    let delegate = SafariViewDismissDelegate { [weak request, weak installManager] in
-                        NSLog("🔔 [DownloadView] Safari安装弹窗已关闭")
-
-                        guard let requestId = request?.id,
-                              let installManager = installManager else { return }
-
-                        Task { @MainActor in
-
-                            if let installState = installManager.installingRequests[requestId] {
-                                switch installState.status {
-                                case .preparing, .prompting:
-
-                                    NSLog("ℹ️ [DownloadView] 用户关闭了安装弹窗，重置安装状态")
-                                    installManager.cancelInstallation(requestId: requestId)
-                                    GlobalInstallationManager.shared.finishInstallation(for: requestId)
-                                case .installing:
-
-                                    NSLog("ℹ️ [DownloadView] 安装正在后台进行中")
-                                case .completed, .failed, .timeout, .cancelled:
-
-                                    break
-                                }
-                            }
-                        }
+                    let localIP = "127.0.0.1"
+                    let ipaURL = "http://\(localIP):\(port)/\(request.bundleIdentifier).ipa?sign=1"
+                    
+                    var manifestComponents = URLComponents(string: "https://api.palera.in/genPlist")
+                    manifestComponents?.queryItems = [
+                        URLQueryItem(name: "bundleid", value: request.bundleIdentifier),
+                        URLQueryItem(name: "name", value: request.name),
+                        URLQueryItem(name: "version", value: request.version),
+                        URLQueryItem(name: "fetchurl", value: ipaURL)
+                    ]
+                    
+                    guard let manifestURL = manifestComponents?.url?.absoluteString else {
+                        NSLog("❌ [DownloadView] 无法构造 manifest URL")
+                        installationMessage = "install_start_failed".localized
+                        cleanupInstallation(request.id)
+                        return
+                    }
+                    
+                    let actionItem = URLQueryItem(name: "action", value: "download-manifest")
+                    let urlItem = URLQueryItem(name: "url", value: manifestURL)
+                    
+                    var comps = URLComponents()
+                    comps.queryItems = [actionItem, urlItem]
+                    
+                    guard let percentEncodedQuery = comps.percentEncodedQuery else {
+                        NSLog("❌ [DownloadView] 无法编码查询参数")
+                        installationMessage = "install_start_failed".localized
+                        cleanupInstallation(request.id)
+                        return
+                    }
+                    
+                    let itmsURLString = "itms-services://?" + percentEncodedQuery
+                    
+                    guard let itmsURL = URL(string: itmsURLString) else {
+                        NSLog("❌ [DownloadView] 无法构造 itms-services URL: \(itmsURLString)")
+                        installationMessage = "install_start_failed".localized
+                        cleanupInstallation(request.id)
+                        return
                     }
 
+                    NSLog("🔗 [DownloadView] Manifest URL: \(manifestURL)")
+                    NSLog("📱 [DownloadView] ITMS URL: \(itmsURL.absoluteString)")
+                    
+                    guard UIApplication.shared.canOpenURL(itmsURL) else {
+                        NSLog("❌ [DownloadView] 无法打开 itms-services URL (canOpenURL 返回 false)")
+                        NSLog("❌ [DownloadView] 请检查 Info.plist 中是否配置了 itms-services URL Scheme")
+                        installationMessage = "install_start_failed".localized
+                        cleanupInstallation(request.id)
+                        return
+                    }
+                    
+                    NSLog("✅ [DownloadView] canOpenURL 检查通过，准备打开")
 
-                    objc_setAssociatedObject(
-                        safariVC,
-                        &SafariViewDismissDelegateAssociatedKey,
-                        delegate,
-                        .OBJC_ASSOCIATION_RETAIN_NONATOMIC
-                    )
-
-                    safariVC.delegate = delegate
-
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootVC = windowScene.windows.first?.rootViewController {
-                        rootVC.present(safariVC, animated: true)
+                    UIApplication.shared.open(itmsURL, options: [:]) { success in
+                        DispatchQueue.main.async {
+                            if success {
+                                NSLog("✅ [DownloadView] 成功唤起系统安装对话框")
+                                isInstalling = false
+                            } else {
+                                NSLog("❌ [DownloadView] 唤起系统安装失败 (open 返回 false)")
+                                installationMessage = "install_start_failed".localized
+                                cleanupInstallation(request.id)
+                            }
+                        }
                     }
                 }
 
@@ -1976,31 +1833,12 @@ struct DownloadCardView: SwiftUI.View {
                     isInstalling = false
                     installationProgress = 0.0
 
-                    GlobalInstallationManager.shared.finishInstallation(for: request.id)
                     HTTPServerManager.shared.stopServer(for: request.id)
                 }
                 UIApplication.shared.endBackgroundTask(backgroundTaskID)
             }
         }
     }
-
-    private func updateInstallationUI(with status: InstallationStatus) {
-        installationMessage = status.description
-
-        switch status {
-        case .preparing, .prompting, .installing:
-            isInstalling = true
-        case .completed:
-            isInstalling = false
-            installationProgress = 1.0
-            globalInstallManager.finishInstallation(for: request.id)
-        case .failed, .timeout, .cancelled:
-            isInstalling = false
-            globalInstallManager.finishInstallation(for: request.id)
-        }
-    }
-
-
 
 
     private func cleanupInstallation(_ requestId: UUID, keepServer: Bool = false) {
@@ -2009,15 +1847,7 @@ struct DownloadCardView: SwiftUI.View {
             await MainActor.run {
                 isInstalling = false
                 installationProgress = 0.0
-
-
-                if !GlobalInstallationManager.shared.isAnyInstalling {
-                    installationMessage = ""
-                }
-
-
-                GlobalInstallationManager.shared.finishInstallation(for: requestId)
-
+                installationMessage = ""
 
                 NSLog("🧹 [DownloadView] 清理安装资源，请求ID: \(requestId)，是否保留服务器: \(keepServer)")
 

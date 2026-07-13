@@ -46,8 +46,6 @@ struct LanguageSettingsView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-            } header: {
-                Text("language_recommended".localized)
             }
         }
         .listStyle(.insetGrouped)
