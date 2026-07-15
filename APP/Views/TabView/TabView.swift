@@ -55,7 +55,6 @@ struct TabbarView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-
             TabEnum.view(for: .settings, themeManager: themeManager)
                 .tabItem {
                     Image(systemName: TabEnum.settings.icon)
@@ -83,6 +82,12 @@ struct TabbarView: View {
                     Text(TabEnum.search.title)
                 }
                 .tag(TabEnum.search)
+        }
+        .onAppear {
+            AnalyticsManager.shared.trackScreen(selectedTab.rawValue)
+        }
+        .onChange(of: selectedTab) { newValue in
+            AnalyticsManager.shared.trackScreen(newValue.rawValue)
         }
         .tint(themeManager.accentColor)
         .background(themeManager.backgroundColor)

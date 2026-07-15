@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
  extension Date {
      var iso8601: String {
          let formatter = ISO8601DateFormatter()
@@ -151,28 +158,24 @@ struct EnhancedAppCard: SwiftUI.View {
 
     private func screenshotsSection(_ screenshots: [String]) -> some SwiftUI.View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(screenshots.prefix(3), id: \.self) { screenshotURL in
-                    if let url = URL(string: screenshotURL) {
-                        AsyncImage(url: url) { phase in
-                            if let image = phase.image {
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                            } else {
-                                Color.gray.opacity(0.2)
+                HStack(spacing: 8) {
+                    ForEach(screenshots.prefix(3), id: \.self) { screenshotURL in
+                        if let url = URL(string: screenshotURL) {
+                            AsyncImage(url: url) { phase in
+                                if let image = phase.image {
+                                    image
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                } else {
+                                    Color(.systemGray6)
+                                }
                             }
+                            .frame(width: 120, height: 240)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .frame(width: 120, height: 240)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.black.opacity(0.05), lineWidth: 0.5)
-                        )
                     }
                 }
             }
-        }
     }
 
     private var appIcon: some SwiftUI.View {
@@ -185,28 +188,20 @@ struct EnhancedAppCard: SwiftUI.View {
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                         } else {
-                            Color.gray.opacity(0.2)
+                            Color(.systemGray6)
                         }
                     }
                     .frame(width: 64, height: 64)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(Color.black.opacity(0.05), lineWidth: 0.5)
-                    )
                 } else {
                     Rectangle()
-                        .fill(Color.gray.opacity(0.2))
+                        .fill(Color(.systemGray6))
                         .overlay(
                             Image(systemName: "app.fill")
-                                .foregroundColor(.gray)
+                                .foregroundColor(.secondary)
                         )
                         .frame(width: 64, height: 64)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.black.opacity(0.05), lineWidth: 0.5)
-                        )
                 }
             }
         )
@@ -215,27 +210,25 @@ struct EnhancedAppCard: SwiftUI.View {
     private var getButton: some SwiftUI.View {
         Group {
             if isDownloading {
-
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .frame(width: 20, height: 20)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.blue)
-                    )
+                AppStoreProgressButtonStyle()
             } else {
-
                 Button(action: onGetAction) {
-                    Text(app.formattedPrice == "free".localized || app.price == 0 ? "get".localized : (app.formattedPrice ?? "view".localized))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-                        .background(Capsule().fill(Color.blue))
+                    Text(buttonTitle)
                 }
+                .buttonStyle(AppStoreButtonStyle())
             }
         }
+    }
+    
+    private var buttonTitle: String {
+        if let fp = app.formattedPrice {
+            let lower = fp.lowercased()
+            if lower.contains("free") || fp == "free".localized || app.price == 0 {
+                return "get".localized
+            }
+            return fp
+        }
+        return "get".localized
     }
 
     private func formatRatingCount(_ count: Int) -> String {
@@ -284,6 +277,7 @@ struct SearchSuggestionsView: SwiftUI.View {
 
                 if suggestion != suggestions.last {
                     Divider()
+                        .background(Color(.separator))
                         .padding(.leading, 44)
                 }
             }
@@ -465,7 +459,7 @@ struct ReviewCard: SwiftUI.View {
                         ForEach(1..<6) { star in
                             Image(systemName: star <= Int(review.rating) ? "star.fill" : "star")
                                 .font(.system(size: 12))
-                                .foregroundColor(star <= Int(review.rating) ? .yellow : .gray)
+                                .foregroundColor(star <= Int(review.rating) ? .yellow : Color(.systemGray4))
                         }
                         Text("\(review.rating)/5")
                             .font(.caption)
@@ -510,16 +504,13 @@ struct EnhancedAppDetailView: SwiftUI.View {
     @Binding var isDownloading: Bool
     @SwiftUI.Environment(\.dismiss) var dismiss
     @SwiftUI.EnvironmentObject var themeManager: ThemeManager
+    @State private var isReleaseNotesExpanded = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
 
                 headerSection
-
-                if let screenshots = app.screenshotUrls, !screenshots.isEmpty {
-                    screenshotsSection(screenshots)
-                }
 
                 if let rating = app.averageUserRating, rating > 0 {
                     ratingsSection
@@ -533,13 +524,11 @@ struct EnhancedAppDetailView: SwiftUI.View {
                     descriptionSection(description)
                 }
 
-                informationSection
-
                 if let releaseNotes = app.releaseNotes, !releaseNotes.isEmpty {
                     updateNotesSection(releaseNotes)
                 }
 
-                technicalInfoSection
+                informationSection
             }
             .padding()
         }
@@ -556,109 +545,119 @@ struct EnhancedAppDetailView: SwiftUI.View {
     }
 
     private var headerSection: some SwiftUI.View {
-        HStack(alignment: .top, spacing: 16) {
+        let iconURL = app.artworkUrl512 ?? app.artworkUrl100
 
-            Group {
-                if let iconURL = app.artworkUrl512 ?? app.artworkUrl100, let url = URL(string: iconURL) {
-                    AsyncImage(url: url) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.2))
-                    }
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
+        return ZStack(alignment: .top) {
+            GeometryReader { geometry in
+                ZStack {
+                    ArtworkView(
+                        url: URL(string: iconURL ?? ""),
+                        contentMode: .fill,
+                        cornerRadius: 0,
+                        showsBorder: false,
+                        loadingAnimation: false
+                    )
+                    .frame(width: geometry.size.width * 2, height: geometry.size.width * 2)
+                    .position(x: geometry.size.width / 2, y: 0)
+                    .blur(radius: 50)
+                    .clipped()
+
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color.black.opacity(0),
+                            themeManager.selectedTheme == .dark ? Color.black.opacity(0.7) : Color.black.opacity(0.5)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 }
+                .frame(height: 210)
             }
-            .frame(width: 120, height: 120)
-            .clipShape(RoundedRectangle(cornerRadius: 28))
-            .overlay(
-                RoundedRectangle(cornerRadius: 28)
-                    .stroke(Color.black.opacity(0.1), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+            .frame(height: 210)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(app.name)
-                    .font(.system(size: 22, weight: .bold))
+            VStack(spacing: 0) {
+                HStack(alignment: .bottom, spacing: 16) {
+                    ArtworkView(
+                        url: URL(string: iconURL ?? ""),
+                        contentMode: .fill,
+                        cornerRadius: 28,
+                        showsBorder: true
+                    )
+                    .frame(width: 120, height: 120)
+                    .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 6)
 
-                if let developer = app.artistName {
-                    Text(developer)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let genre = app.primaryGenreName {
+                            Text(genre.uppercased())
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Text(app.name)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+
+                        if let developer = app.artistName {
+                            Text(developer)
+                                .font(.system(size: 15, weight: .regular))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        if let formattedPrice = app.formattedPrice {
+                            Text(formattedPrice)
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.bottom, 4)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 24)
 
-                if let genre = app.primaryGenreName {
-                    Text(genre)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                HStack(spacing: 8) {
-
+                HStack(spacing: 12) {
                     Button(action: { onPrimaryAction?(app) }) {
                         if isDownloading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .frame(width: 20, height: 20)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(themeManager.accentColor)
-                                )
+                            AppStoreProgressButtonStyle()
                         } else {
                             Text(buttonTitle)
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(themeManager.accentColor)
-                                )
                         }
                     }
+                    .buttonStyle(AppStoreButtonStyle())
                     .disabled(isDownloading)
 
+                    Button(action: shareApp) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.primary)
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Circle()
+                                    .fill(Color(.systemGray6))
+                            )
+                    }
+
+                    Spacer()
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 20)
             }
         }
-        .padding(.vertical)
+        .frame(height: 280)
     }
 
-    private func screenshotsSection(_ screenshots: [String]) -> some SwiftUI.View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("screenshots".localized)
-                .font(.system(size: 20, weight: .bold))
+    private func shareApp() {
+        guard let url = URL(string: app.trackViewUrl) else { return }
+        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(screenshots, id: \.self) { screenshotURL in
-                        if let url = URL(string: screenshotURL) {
-                            AsyncImage(url: url) { image in
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                            } placeholder: {
-                                Rectangle()
-                                    .fill(Color.gray.opacity(0.2))
-                            }
-                            .frame(height: 400)
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20)
-                                    .stroke(Color.black.opacity(0.1), lineWidth: 0.5)
-                            )
-                        }
-                    }
-                }
-            }
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            activityVC.popoverPresentationController?.sourceView = rootVC.view
+            rootVC.present(activityVC, animated: true)
         }
     }
 
@@ -667,56 +666,95 @@ struct EnhancedAppDetailView: SwiftUI.View {
             Text("ratings_and_reviews".localized)
                 .font(.system(size: 20, weight: .bold))
 
-            HStack(spacing: 40) {
-
-                VStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 20) {
+                VStack(spacing: 6) {
                     Text(String(format: "%.1f", app.averageUserRating ?? 0))
                         .font(.system(size: 48, weight: .bold))
+                        .foregroundColor(.primary)
 
-                    HStack(spacing: 2) {
-                        ForEach(0..<5) { index in
-                            Image(systemName: index < Int((app.averageUserRating ?? 0).rounded()) ? "star.fill" : "star")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                    }
+                    StarRatingView(rating: app.averageUserRating ?? 0, size: 12)
 
                     if let count = app.userRatingCount {
                         Text(String(format: "x_ratings".localized, formatNumber(count)))
-                            .font(.caption)
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.secondary)
                     }
                 }
+                .frame(width: 100, alignment: .center)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach((1...5).reversed(), id: \.self) { star in
                         HStack(spacing: 8) {
-                            Text("\(star)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            HStack(spacing: 0) {
+                                ForEach(0..<star, id: \.self) { _ in
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 8))
+                                }
+                            }
+                            .foregroundColor(.secondary)
+                            .frame(width: 45, alignment: .trailing)
 
                             GeometryReader { geometry in
                                 ZStack(alignment: .leading) {
-                                    Rectangle()
-                                        .fill(Color.gray.opacity(0.2))
+                                    RoundedRectangle(cornerRadius: 1)
+                                        .fill(Color(.systemGray6))
+                                        .frame(height: 3)
 
-                                    Rectangle()
-                                        .fill(Color.orange)
-                                        .frame(width: geometry.size.width * randomPercentage())
+                                    RoundedRectangle(cornerRadius: 1)
+                                        .fill(themeManager.accentColor)
+                                        .frame(width: geometry.size.width * estimatedPercentage(for: star))
+                                        .frame(height: 3)
                                 }
                             }
-                            .frame(height: 4)
-                            .clipShape(Capsule())
+                            .frame(height: 3)
                         }
                     }
                 }
+                .padding(.top, 12)
             }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(themeManager.selectedTheme == .dark ? Color(.systemGray6) : Color(.systemGray6).opacity(0.5))
-            )
+
+            Divider()
+
+            NavigationLink(destination: AppReviewsView(appID: String(app.trackId))) {
+                HStack {
+                    Text("see_all_reviews".localized)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
         }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.systemGray6))
+        )
+    }
+
+    private func estimatedPercentage(for star: Int) -> Double {
+        let rating = app.averageUserRating ?? 0
+        let percentages: [Int: Double]
+        
+        if rating >= 4.5 {
+            percentages = [5: 0.75, 4: 0.18, 3: 0.04, 2: 0.02, 1: 0.01]
+        } else if rating >= 4.0 {
+            percentages = [5: 0.60, 4: 0.25, 3: 0.10, 2: 0.03, 1: 0.02]
+        } else if rating >= 3.5 {
+            percentages = [5: 0.45, 4: 0.30, 3: 0.15, 2: 0.06, 1: 0.04]
+        } else if rating >= 3.0 {
+            percentages = [5: 0.30, 4: 0.30, 3: 0.20, 2: 0.12, 1: 0.08]
+        } else {
+            percentages = [5: 0.15, 4: 0.20, 3: 0.25, 2: 0.20, 1: 0.20]
+        }
+        
+        return percentages[star] ?? 0
     }
 
     private func descriptionSection(_ description: String) -> some SwiftUI.View {
@@ -724,70 +762,117 @@ struct EnhancedAppDetailView: SwiftUI.View {
             Text("description".localized)
                 .font(.system(size: 20, weight: .bold))
 
-            Text(description)
-                .font(.body)
-                .foregroundColor(.primary)
-                .lineSpacing(6)
+            DescriptionExpandableText(text: description, lineLimit: 5)
         }
     }
 
     private var informationSection: some SwiftUI.View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("info".localized)
+            Text("information".localized)
                 .font(.system(size: 20, weight: .bold))
 
-            VStack(spacing: 12) {
-                if let seller = app.sellerName {
-                    infoRow(title: "developer".localized, value: seller)
-                }
+            let columns = [
+                GridItem(.flexible(), spacing: 12),
+                GridItem(.flexible(), spacing: 12)
+            ]
 
-                if let size = app.fileSizeBytes, !size.isEmpty {
-                    infoRow(title: "size".localized, value: formatFileSize(size))
-                }
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(buildInfoItems(), id: \.title) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title)
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
 
-                if let category = app.primaryGenreName {
-                    infoRow(title: "category".localized, value: category)
-                }
-
-                if let genres = app.genres, !genres.isEmpty {
-                    infoRow(title: "category".localized, value: genres.joined(separator: ", "))
-                }
-
-                if !app.version.isEmpty {
-                    infoRow(title: "current_version".localized, value: app.version)
-                }
-
-                if let minOS = app.minimumOsVersion, !minOS.isEmpty {
-                    infoRow(title: "compatibility".localized, value: String(format: "requires_ios".localized, minOS))
-                }
-
-                if let rating = app.contentAdvisoryRating, !rating.isEmpty {
-                    infoRow(title: "age_rating".localized, value: rating)
-                }
-
-                if let languages = app.languageCodesISO2A, !languages.isEmpty {
-                    infoRow(title: "language".localized, value: String(format: "x_languages".localized, String(languages.count)))
+                        Text(item.value)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(.systemGray6))
+                    )
                 }
             }
         }
     }
 
+    private func buildInfoItems() -> [(title: String, value: String)] {
+        var items: [(title: String, value: String)] = []
+
+        if let size = app.fileSizeBytes, !size.isEmpty {
+            items.append((title: "size".localized, value: formatFileSize(size)))
+        }
+
+        if let category = app.primaryGenreName {
+            items.append((title: "category".localized, value: category))
+        }
+
+        if let rating = app.contentAdvisoryRating, !rating.isEmpty {
+            items.append((title: "age_rating".localized, value: rating))
+        }
+
+        if let seller = app.sellerName {
+            items.append((title: "developer".localized, value: seller))
+        } else if let artist = app.artistName {
+            items.append((title: "developer".localized, value: artist))
+        }
+
+        if !app.version.isEmpty {
+            items.append((title: "current_version".localized, value: app.version))
+        }
+
+        if let languages = app.languageCodesISO2A, !languages.isEmpty {
+            let langName = Locale.current.localizedString(forLanguageCode: languages.first ?? "") ?? languages.first ?? "EN"
+            items.append((title: "language".localized, value: languages.count > 1 ? String(format: "x_languages".localized, String(languages.count)) : langName))
+        } else {
+            items.append((title: "language".localized, value: "N/A"))
+        }
+
+        return items
+    }
+
     private func updateNotesSection(_ notes: String) -> some SwiftUI.View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("whats_new".localized)
-                .font(.system(size: 20, weight: .bold))
+            HStack(alignment: .firstTextBaseline) {
+                Text("whats_new".localized)
+                    .font(.system(size: 20, weight: .bold))
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    if !app.version.isEmpty {
+                        Text(app.version)
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+
+                    if let releaseDate = app.currentVersionReleaseDate, !releaseDate.isEmpty {
+                        Text(formatShortReleaseDate(releaseDate))
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
 
             VStack(alignment: .leading, spacing: 8) {
-                if !app.version.isEmpty {
-                    Text(String(format: "version_x".localized, app.version))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
                 Text(notes)
                     .font(.body)
                     .foregroundColor(.primary)
                     .lineSpacing(6)
+                    .lineLimit(isReleaseNotesExpanded ? nil : 3)
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isReleaseNotesExpanded.toggle()
+                    }
+                }) {
+                    Text(isReleaseNotesExpanded ? "collapse".localized : "expand".localized)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.blue)
+                }
             }
         }
     }
@@ -856,6 +941,17 @@ struct EnhancedAppDetailView: SwiftUI.View {
         return dateString
     }
 
+    private func formatShortReleaseDate(_ dateString: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
+
+        if let date = formatter.date(from: dateString) {
+            formatter.dateFormat = "MM/dd/yyyy"
+            return formatter.string(from: date)
+        }
+        return dateString
+    }
+
     var buttonTitle: String {
         if let fp = app.formattedPrice {
             let lower = fp.lowercased()
@@ -868,6 +964,108 @@ struct EnhancedAppDetailView: SwiftUI.View {
     }
 }
 
+struct DescriptionExpandableText: View {
+    let text: String
+    var lineLimit: Int = 5
+    
+    @State private var isExpanded = false
+    @State private var isTruncated = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomTrailing) {
+                Text(text)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .lineSpacing(6)
+                    .lineLimit(isExpanded ? nil : lineLimit)
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear
+                                .onAppear {
+                                    detectTruncation(in: geometry)
+                                }
+                                .onChange(of: text) { _ in
+                                    detectTruncation(in: geometry)
+                                }
+                        }
+                    )
+                
+                if isTruncated && !isExpanded {
+                    HStack(spacing: 0) {
+                        Spacer()
+                        
+                        LinearGradient(
+                            colors: [
+                                Color(.systemBackground).opacity(0),
+                                Color(.systemBackground).opacity(1)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: 60, height: 24)
+                        
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                isExpanded = true
+                            }
+                        }) {
+                            Text("more".localized)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.blue)
+                                .padding(.leading, 8)
+                                .background(Color(.systemBackground))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+            }
+            
+            if isExpanded && isTruncated {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            isExpanded = false
+                        }
+                    }) {
+                        Text("less".localized)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.blue)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.top, 8)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    
+    private func detectTruncation(in geometry: GeometryProxy) {
+        let textView = UITextView()
+        textView.text = text
+        textView.font = .systemFont(ofSize: UIFont.systemFontSize)
+        textView.textContainer.maximumNumberOfLines = lineLimit
+        textView.textContainer.lineBreakMode = .byTruncatingTail
+        textView.frame.size = CGSize(
+            width: geometry.size.width,
+            height: .greatestFiniteMagnitude
+        )
+        textView.sizeToFit()
+        
+        let layoutHeight = textView.sizeThatFits(
+            CGSize(width: geometry.size.width, height: .greatestFiniteMagnitude)
+        ).height
+        
+        let lineHeight = textView.font?.lineHeight ?? 20
+        let maxHeight = CGFloat(lineLimit) * lineHeight + (CGFloat(lineLimit - 1) * 6)
+        
+        DispatchQueue.main.async {
+            isTruncated = layoutHeight > maxHeight
+        }
+    }
+}
+
 struct SearchView: SwiftUI.View {
 
     @AppStorage("searchKey") var searchKey = ""
@@ -877,14 +1075,7 @@ struct SearchView: SwiftUI.View {
     @EnvironmentObject var themeManager: ThemeManager
 
     private var searchBarBackgroundColor: Color {
-        switch themeManager.selectedTheme {
-        case .light:
-            return Color.gray.opacity(0.1)
-        case .dark:
-            return Color(.systemGray6)
-        case .system:
-            return UITraitCollection.current.userInterfaceStyle == .dark ? Color(.systemGray6) : Color.gray.opacity(0.1)
-        }
+        Color(.systemGray6)
     }
     @EnvironmentObject var appStore: AppStore
     @StateObject private var sessionManager = SessionManager.shared
@@ -1002,11 +1193,15 @@ struct SearchView: SwiftUI.View {
     @State var isFetchingSuggestions: Bool = false
     @State var searchCache: [String: [iTunesSearchResult]] = [:]
     @State var showSearchSuggestions = false
+    @StateObject private var suggestionsDebounce = Debounce(delay: 0.1)
+    private let searchSuggestionsCache = LRUCache<String, [String]>(capacity: 50)
     @StateObject var vm = AppStore.this
     @State private var animateHeader = false
     @State private var animateCards = false
     @State private var animateSearchBar = false
     @State private var animateResults = false
+    @State private var scrollVelocity: CGFloat = 0
+    @State private var isScrollingFast = false
 
     @State var showVersionPicker = false
     @State var selectedApp: iTunesSearchResult?
@@ -1049,7 +1244,17 @@ struct SearchView: SwiftUI.View {
                                     .opacity(animateResults ? 1 : 0)
                                     .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.3), value: animateResults)
                             }
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear
+                                        .preference(key: ScrollOffsetPreferenceKey.self, value: geometry.frame(in: .named("scroll")).origin.y)
+                                }
+                            )
+                            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+                                detectScrollVelocity(offset: value)
+                            }
                         }
+                        .coordinateSpace(name: "scroll")
                         .refreshable {
                             if !searchKey.isEmpty {
                                 await performSearch()
@@ -1060,6 +1265,21 @@ struct SearchView: SwiftUI.View {
             }
             .navigationTitle("")
             .navigationBarHidden(true)
+            .sheet(isPresented: $showVersionPicker) {
+                versionPickerSheet
+                    .environmentObject(appStore)
+                    .environmentObject(themeManager)
+            }
+            .sheet(isPresented: $showAccountSheet) {
+                AccountSheetView()
+                    .environmentObject(appStore)
+                    .environmentObject(themeManager)
+            }
+            .sheet(isPresented: $showLoginSheet) {
+                AddAccountView()
+                    .environmentObject(appStore)
+                    .environmentObject(themeManager)
+            }
         }
         .navigationViewStyle(.stack)
         .onAppear {
@@ -1109,23 +1329,7 @@ struct SearchView: SwiftUI.View {
                 print("[SearchView] 账户已登出，使用默认地区 US")
             }
         }
-        .sheet(isPresented: $showVersionPicker) {
-            versionPickerSheet
-        }
 
-        .sheet(isPresented: $showLoginSheet) {
-            AddAccountView()
-                .environmentObject(appStore)
-                .environmentObject(themeManager)
-        }
-        .sheet(isPresented: $showAccountMenu) {
-            accountMenuSheet
-        }
-        .sheet(isPresented: $showAccountSheet) {
-            AccountSheetView()
-                .environmentObject(appStore)
-                .environmentObject(themeManager)
-        }
 
     }
 
@@ -1138,14 +1342,32 @@ struct SearchView: SwiftUI.View {
                 TextField("search_placeholder".localized, text: $searchKey)
                     .font(.body)
                     .focused($searchKeyFocused)
+                    .onChange(of: searchKeyFocused) { isFocused in
+                        if isFocused, !searchKey.isEmpty {
+                            showSearchSuggestions = true
+                            searchSuggestions = getSearchSuggestions(for: searchKey)
+                            if let cached = searchSuggestionsCache.value(forKey: searchKey) {
+                                let combined = Array(Set((searchSuggestions + cached))).sorted()
+                                searchSuggestions = combined
+                            }
+                        }
+                    }
                     .onChange(of: searchKey) { newValue in
                         if !newValue.isEmpty {
                             showSearchSuggestions = true
 
                             searchSuggestions = getSearchSuggestions(for: newValue)
 
-                            Task { await fetchRemoteSuggestions(for: newValue) }
+                            if let cached = searchSuggestionsCache.value(forKey: newValue) {
+                                let combined = Array(Set((searchSuggestions + cached))).sorted()
+                                searchSuggestions = combined
+                            }
+
+                            suggestionsDebounce.execute {
+                                Task { await fetchRemoteSuggestions(for: newValue) }
+                            }
                         } else {
+                            suggestionsDebounce.cancel()
                             showSearchSuggestions = false
                             searchSuggestions = []
                         }
@@ -1171,10 +1393,14 @@ struct SearchView: SwiftUI.View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(searchBarBackgroundColor)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 16)
                     .stroke(
-                        searchKeyFocused ? .blue : Color.clear,
+                        searchKeyFocused ? themeManager.accentColor : Color.clear,
                         lineWidth: 2
                     )
             )
@@ -1237,31 +1463,26 @@ struct SearchView: SwiftUI.View {
 
                 HStack(spacing: 16) {
 
-                    Button(action: {
-                        showAccountMenu = true
-                    }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "person.circle.fill")
-                                .font(.title2)
-                                .foregroundColor(themeManager.accentColor)
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(themeManager.accentColor)
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(currentAccount.email)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(currentAccount.email)
+                                .font(.caption)
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+
+                            HStack(spacing: 8) {
+                                Text(flag(country: currentAccount.countryCode))
                                     .font(.caption)
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-
-                                HStack(spacing: 8) {
-                                    Text(flag(country: currentAccount.countryCode))
-                                        .font(.caption)
-                                    Text(SearchView.countryCodeMapChinese[currentAccount.countryCode] ?? SearchView.countryCodeMap[currentAccount.countryCode] ?? currentAccount.countryCode)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                                Text(SearchView.countryCodeMapChinese[currentAccount.countryCode] ?? SearchView.countryCodeMap[currentAccount.countryCode] ?? currentAccount.countryCode)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
                     }
-                    .buttonStyle(.plain)
 
                     Spacer()
 
@@ -1279,7 +1500,7 @@ struct SearchView: SwiftUI.View {
                         .padding(.vertical, 8)
                         .background(
                             Capsule()
-                                .fill(Color.gray.opacity(0.1))
+                                .fill(Color(.systemGray6))
                         )
                     }
                     .buttonStyle(.plain)
@@ -1288,7 +1509,7 @@ struct SearchView: SwiftUI.View {
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(themeManager.selectedTheme == .dark ? Color(.secondarySystemBackground) : Color(.secondarySystemBackground))
+                        .fill(Color(.secondarySystemBackground))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(themeManager.accentColor.opacity(0.2), lineWidth: 1)
@@ -1332,10 +1553,10 @@ struct SearchView: SwiftUI.View {
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(themeManager.selectedTheme == .dark ? Color(.secondarySystemBackground) : Color(.secondarySystemBackground))
+                        .fill(Color(.secondarySystemBackground))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                                .stroke(Color(.separator), lineWidth: 1)
                         )
                 )
                 .padding(.horizontal, 24)
@@ -1381,7 +1602,7 @@ struct SearchView: SwiftUI.View {
                                         .font(.caption)
                                 }
                                 .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                                .background(Capsule().fill(Color(.systemGray6)))
                                 .foregroundColor(.primary)
                             }
 
@@ -1504,13 +1725,13 @@ struct SearchView: SwiftUI.View {
 
             ZStack {
                 Circle()
-                    .stroke(.blue.opacity(0.2), lineWidth: 4)
+                    .stroke(themeManager.accentColor.opacity(0.2), lineWidth: 4)
                     .frame(width: 60, height: 60)
                 Circle()
                     .trim(from: 0, to: 0.7)
                     .stroke(
                         LinearGradient(
-                            colors: [.blue, .gray],
+                            colors: [themeManager.accentColor, Color(.systemGray4)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
@@ -1698,27 +1919,15 @@ struct SearchView: SwiftUI.View {
     }
 
     func resultCardView(item: iTunesSearchResult, index: Int) -> any SwiftUI.View {
-        return EnhancedAppCard(app: item, onTap: {
-
-            let appDetailView = EnhancedAppDetailView(
-                app: item,
-                onPrimaryAction: { appToDownload in
-
-                    handleDownloadApp(appToDownload)
-                },
-                isDownloading: $isDownloading
-            )
-            .environmentObject(themeManager)
-
-            let hostingController = UIHostingController(rootView: appDetailView)
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                windowScene.windows.first?.rootViewController?.present(hostingController, animated: true)
-            }
+        return AppSearchResultCardView(app: item, onTap: {
+            handleDownloadApp(item)
         }, onGetAction: {
 
             handleDownloadApp(item)
-        }, isDownloading: $isDownloading)
+        }, isDownloading: $isDownloading, isPreview: isScrollingFast)
         .environmentObject(themeManager)
+        .id(item.trackId)
+        .animation(nil, value: isScrollingFast)
     }
 
     func startAnimations() {
@@ -1729,6 +1938,33 @@ struct SearchView: SwiftUI.View {
             animateResults = true
         }
     }
+    
+    @State private var lastScrollOffset: CGFloat = 0
+    @State private var lastScrollTime: Date = Date()
+    
+    private func detectScrollVelocity(offset: CGFloat) {
+        let now = Date()
+        let timeDiff = now.timeIntervalSince(lastScrollTime)
+        
+        if timeDiff > 0 {
+            let offsetDiff = abs(offset - lastScrollOffset)
+            let velocity = offsetDiff / timeDiff
+            scrollVelocity = velocity
+            
+            let fastThreshold: CGFloat = 800
+            let isFast = velocity > fastThreshold
+            
+            if isFast != isScrollingFast {
+                withAnimation(.easeInOut(duration: 0.1)) {
+                    isScrollingFast = isFast
+                }
+            }
+        }
+        
+        lastScrollOffset = offset
+        lastScrollTime = now
+    }
+    
     func flag(country: String) -> String {
         let base: UInt32 = 127397
         var s = ""
@@ -1742,6 +1978,8 @@ struct SearchView: SwiftUI.View {
     @MainActor
     func performSearch() async {
         guard !searchKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        AnalyticsManager.shared.track("search", properties: ["keyword": searchKey])
 
         let regionToUse = appStore.selectedAccount?.countryCode ?? "US"
         print("[SearchView] 执行搜索，使用地区: \(regionToUse)")
@@ -1872,10 +2110,18 @@ struct SearchView: SwiftUI.View {
         if isFetchingSuggestions { return }
         isFetchingSuggestions = true
         defer { isFetchingSuggestions = false }
+
+        if let cached = searchSuggestionsCache.value(forKey: query) {
+            let combined = Array(Set((searchSuggestions + cached))).sorted()
+            await MainActor.run { self.searchSuggestions = combined }
+            return
+        }
+
         let res = await SearchManager.shared.suggest(term: query)
         switch res {
         case .success(let terms):
             let remote = terms.map { $0.term }
+            searchSuggestionsCache.setValue(remote, forKey: query)
             let combined = Array(Set((searchSuggestions + remote))).sorted()
             await MainActor.run { self.searchSuggestions = combined }
         case .failure:
@@ -1904,7 +2150,7 @@ struct SearchView: SwiftUI.View {
                 } else if i == full && half {
                     Image(systemName: "star.leadinghalf.filled").foregroundColor(.orange)
                 } else {
-                    Image(systemName: "star").foregroundColor(.orange.opacity(0.4))
+                    Image(systemName: "star").foregroundColor(Color(.systemGray4))
                 }
             }
             if let c = count { Text("(\(c))").font(.caption2).foregroundColor(.secondary) }
@@ -2025,10 +2271,13 @@ struct SearchView: SwiftUI.View {
                     countryCode: appStore.selectedAccount?.countryCode ?? "US"
                 )
 
-                let histResult = try? await withTimeout(seconds: 3) {
+                let histResult = try? await withTimeout(seconds: 10) {
                     try await iTunesClient.shared.versionHistory(id: app.trackId, country: appStore.selectedAccount?.countryCode ?? "US")
                 }
                 let hist = histResult ?? []
+                if hist.isEmpty {
+                    print("[SearchView] 警告: 未获取到版本历史记录")
+                }
 
                 switch storeVersionsResult {
                 case .success(let versions):
@@ -2056,9 +2305,7 @@ struct SearchView: SwiftUI.View {
             ZStack {
 
                 LinearGradient(
-                    colors: themeManager.selectedTheme == .dark ?
-                        [Color(.systemBackground), Color(.secondarySystemBackground)] :
-                        [Color(.systemBackground), Color(.secondarySystemBackground).opacity(0.3)],
+                    colors: [Color(.systemBackground), Color(.secondarySystemBackground)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -2080,9 +2327,7 @@ struct SearchView: SwiftUI.View {
                 }
                 .background(
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(themeManager.selectedTheme == .dark ?
-                              Color(.secondarySystemBackground).opacity(0.5) :
-                              Color.white.opacity(0.8))
+                        .fill(Color(.secondarySystemBackground))
                         .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
                 )
                 .padding(.horizontal, 16)
@@ -2154,18 +2399,13 @@ struct SearchView: SwiftUI.View {
 
                 VStack(spacing: 16) {
 
-                    AsyncImage(url: URL(string: selectedApp?.artworkUrl512 ?? "")) {
-                        image in
-                        image.resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-                    } placeholder: {
-                        Image(systemName: "app.fill")
-                            .font(.system(size: 64))
-                            .foregroundColor(themeManager.accentColor.opacity(0.3))
-                    }
+                    ArtworkView(
+                        url: URL(string: selectedApp?.artworkUrl512 ?? ""),
+                        contentMode: .fit,
+                        cornerRadius: 20
+                    )
                     .frame(width: 100, height: 100)
+                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
 
                     VStack(spacing: 8) {
                         Text(selectedApp?.trackName ?? "APP")
@@ -2295,9 +2535,7 @@ struct SearchView: SwiftUI.View {
         .padding(.vertical, 16)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(themeManager.selectedTheme == .dark ?
-                      Color(.secondarySystemBackground).opacity(0.3) :
-                      Color.white.opacity(0.9))
+                .fill(Color(.systemGray6))
                 .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 1)
         )
         .padding(.horizontal, 24)
@@ -2329,17 +2567,35 @@ struct SearchView: SwiftUI.View {
     }
 
     private func getVersionDate(version: StoreAppVersion) -> String? {
+        let versionStr = version.versionString
 
         if let date = version.formattedReleaseDate {
             return date
         }
 
-        if let h = versionHistory.first(where: { $0.version == version.versionString }) {
+        if let h = versionHistory.first(where: { $0.version == versionStr }) {
             return h.formattedDate
         }
 
-        if let h = versionHistory.first(where: { version.versionString.hasPrefix($0.version) || $0.version.hasPrefix(version.versionString) }) {
+        if let h = versionHistory.first(where: { versionStr.hasPrefix($0.version) || $0.version.hasPrefix(versionStr) }) {
             return h.formattedDate
+        }
+
+        let versionComponents = versionStr.split(separator: ".").map(String.init)
+        for h in versionHistory {
+            let hComponents = h.version.split(separator: ".").map(String.init)
+            let minCount = min(versionComponents.count, hComponents.count)
+            var matchCount = 0
+            for i in 0..<minCount {
+                if versionComponents[i] == hComponents[i] {
+                    matchCount += 1
+                } else {
+                    break
+                }
+            }
+            if matchCount >= 2 {
+                return h.formattedDate
+            }
         }
 
         if let latestVersion = versionHistory.first {
@@ -2350,11 +2606,50 @@ struct SearchView: SwiftUI.View {
     }
 
     private func shortReleaseNote(for version: StoreAppVersion) -> String? {
-        if let h = versionHistory.first(where: { $0.version == version.versionString }) {
-            if let rn = h.releaseNotes, !rn.isEmpty {
-                let firstLine = rn.split(separator: "\n").first.map(String.init) ?? rn
-                return firstLine
+        let versionStr = version.versionString
+
+        for h in versionHistory {
+            if h.version == versionStr {
+                if let rn = h.releaseNotes, !rn.isEmpty {
+                    let firstLine = rn.split(separator: "\n").first.map(String.init) ?? rn
+                    return firstLine
+                }
             }
+        }
+
+        for h in versionHistory {
+            if versionStr.hasPrefix(h.version) || h.version.hasPrefix(versionStr) {
+                if let rn = h.releaseNotes, !rn.isEmpty {
+                    let firstLine = rn.split(separator: "\n").first.map(String.init) ?? rn
+                    return firstLine
+                }
+            }
+        }
+
+        let versionComponents = versionStr.split(separator: ".").map(String.init)
+        for h in versionHistory {
+            let hComponents = h.version.split(separator: ".").map(String.init)
+            let minCount = min(versionComponents.count, hComponents.count)
+            var matchCount = 0
+            for i in 0..<minCount {
+                if versionComponents[i] == hComponents[i] {
+                    matchCount += 1
+                } else {
+                    break
+                }
+            }
+            if matchCount >= 2 {
+                if let rn = h.releaseNotes, !rn.isEmpty {
+                    let firstLine = rn.split(separator: "\n").first.map(String.init) ?? rn
+                    return firstLine
+                }
+            }
+        }
+
+        if let latestVersion = versionHistory.first,
+           let rn = latestVersion.releaseNotes, !rn.isEmpty {
+            let firstLine = rn.split(separator: "\n").first.map(String.init) ?? rn
+            return firstLine
         }
 
         return nil
@@ -2406,9 +2701,7 @@ struct SearchView: SwiftUI.View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
                     LinearGradient(
-                        colors: themeManager.selectedTheme == .dark ?
-                            [Color(.systemBackground), Color(.secondarySystemBackground)] :
-                            [Color(.systemBackground), Color(.secondarySystemBackground).opacity(0.3)],
+                        colors: [Color(.systemBackground), Color(.secondarySystemBackground)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -2555,9 +2848,7 @@ struct SearchView: SwiftUI.View {
         .listStyle(InsetGroupedListStyle())
         .background(
             LinearGradient(
-                colors: themeManager.selectedTheme == .dark ?
-                    [Color(.systemBackground), Color(.secondarySystemBackground)] :
-                    [Color(.systemBackground), Color(.secondarySystemBackground).opacity(0.3)],
+                colors: [Color(.systemBackground), Color(.secondarySystemBackground)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -2664,27 +2955,12 @@ struct SearchView: SwiftUI.View {
             }
 
             Spacer()
-
-            if appStore.hasMultipleAccounts {
-                Button("switch".localized) {
-                    showVersionPicker = false
-                    showAccountMenu = true
-                }
-                .font(.caption2)
-                .foregroundColor(themeManager.accentColor)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule()
-                        .fill(themeManager.accentColor.opacity(0.1))
-                )
-            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(.systemGray6).opacity(0.5))
+                .fill(Color(.systemGray6))
         )
         .padding(.horizontal, 16)
     }

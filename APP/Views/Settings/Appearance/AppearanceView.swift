@@ -50,14 +50,6 @@ struct AppearanceView: View {
                 }
                 .pickerStyle(.segmented)
             }
-
-            Section {
-                AppearanceTintColorView()
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-            } header: {
-                Text("color".localized)
-            }
         }
     }
 }

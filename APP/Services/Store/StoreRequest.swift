@@ -4,6 +4,7 @@ private final class GUIDCache {
     static let shared = GUIDCache()
     private let lock = NSLock()
     private var cachedGUID: String?
+    private var accountGUIDMap: [String: String] = [:]
 
     func get() -> String {
         lock.lock()
@@ -14,10 +15,28 @@ private final class GUIDCache {
         return generated
     }
 
+    func get(for account: Account) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = account.email
+        if let guid = accountGUIDMap[key], !guid.isEmpty {
+            return guid
+        }
+        let guid = account.deviceGUID
+        accountGUIDMap[key] = guid
+        return guid
+    }
+
     func set(_ guid: String) {
         lock.lock()
         defer { lock.unlock() }
         cachedGUID = guid
+    }
+
+    func set(_ guid: String, for account: Account) {
+        lock.lock()
+        defer { lock.unlock() }
+        accountGUIDMap[account.email] = guid
     }
 
     private func generateFallbackGUID() -> String {
@@ -42,7 +61,15 @@ class StoreRequestDelegate: NSObject, URLSessionDelegate {
 class StoreRequest {
     static let shared = StoreRequest()
     private let session: URLSession
-    private let baseURL = "https://p25-buy.itunes.apple.com"
+    private let bagManager = BagManager.shared
+
+    private var baseURL: String {
+        bagManager.downloadURL
+    }
+
+    private var buyBaseURL: String {
+        bagManager.buyURL
+    }
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -56,6 +83,11 @@ class StoreRequest {
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
         self.session = URLSession(configuration: config, delegate: StoreRequestDelegate(), delegateQueue: delegateQueue)
+    }
+
+    func ensureBagLoaded(storeFront: String? = nil) async {
+        let sf = storeFront ?? "143441-1,32"
+        await bagManager.loadBagIfNeeded(storeFront: sf)
     }
 
     func authenticate(
@@ -93,6 +125,87 @@ class StoreRequest {
         storeFront: String? = nil
     ) async throws -> StoreDownloadResponse {
         let guid = GUIDCache.shared.get()
+        return try await downloadInternal(
+            appIdentifier: appIdentifier,
+            directoryServicesIdentifier: directoryServicesIdentifier,
+            appVersion: appVersion,
+            passwordToken: passwordToken,
+            storeFront: storeFront,
+            guid: guid
+        )
+    }
+
+    func download(
+        appIdentifier: String,
+        account: Account,
+        appVersion: String? = nil
+    ) async throws -> StoreDownloadResponse {
+        let guid = GUIDCache.shared.get(for: account)
+        return try await downloadInternal(
+            appIdentifier: appIdentifier,
+            directoryServicesIdentifier: account.directoryServicesIdentifier,
+            appVersion: appVersion,
+            passwordToken: account.passwordToken,
+            storeFront: account.storeResponse.storeFront,
+            guid: guid
+        )
+    }
+
+    func redownload(
+        appIdentifier: String,
+        account: Account,
+        appVersion: String? = nil
+    ) async throws -> StoreDownloadResponse {
+        let guid = GUIDCache.shared.get(for: account)
+        let url = URL(string: "\(baseURL)/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct?guid=\(guid)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(getUserAgent(), forHTTPHeaderField: "User-Agent")
+        request.setValue(account.directoryServicesIdentifier, forHTTPHeaderField: "X-Dsid")
+        request.setValue(account.directoryServicesIdentifier, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(account.passwordToken, forHTTPHeaderField: "X-Token")
+        request.setValue(normalizeStoreFront(account.storeResponse.storeFront), forHTTPHeaderField: "X-Apple-Store-Front")
+
+        var body: [String: Any] = [
+            "creditDisplay": "",
+            "guid": guid,
+            "salableAdamId": appIdentifier,
+            "redownload": "true"
+        ]
+        if let appVersion = appVersion {
+            if let versionId = Int(appVersion) {
+                body["externalVersionId"] = versionId
+            } else {
+                body["externalVersionId"] = appVersion
+            }
+        }
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: body,
+            format: .xml,
+            options: 0
+        )
+        request.httpBody = plistData
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw StoreError.invalidResponse
+        }
+        let plist = try PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        ) as? [String: Any] ?? [:]
+        return try parseDownloadResponse(plist: plist, httpResponse: httpResponse)
+    }
+
+    private func downloadInternal(
+        appIdentifier: String,
+        directoryServicesIdentifier: String,
+        appVersion: String? = nil,
+        passwordToken: String? = nil,
+        storeFront: String? = nil,
+        guid: String
+    ) async throws -> StoreDownloadResponse {
         let url = URL(string: "\(baseURL)/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct?guid=\(guid)")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -143,7 +256,40 @@ class StoreRequest {
         storeFront: String
     ) async throws -> StorePurchaseResponse {
         let guid = GUIDCache.shared.get()
-        let url = URL(string: "https://buy.itunes.apple.com/WebObjects/MZBuy.woa/wa/buyProduct")!
+        return try await purchaseInternal(
+            appIdentifier: appIdentifier,
+            directoryServicesIdentifier: directoryServicesIdentifier,
+            passwordToken: passwordToken,
+            storeFront: storeFront,
+            guid: guid
+        )
+    }
+
+    func purchase(
+        appIdentifier: String,
+        account: Account
+    ) async throws -> StorePurchaseResponse {
+        let guid = GUIDCache.shared.get(for: account)
+        return try await purchaseInternal(
+            appIdentifier: appIdentifier,
+            directoryServicesIdentifier: account.directoryServicesIdentifier,
+            passwordToken: account.passwordToken,
+            storeFront: account.storeResponse.storeFront,
+            guid: guid
+        )
+    }
+
+    private func purchaseInternal(
+        appIdentifier: String,
+        directoryServicesIdentifier: String,
+        passwordToken: String,
+        storeFront: String,
+        guid: String
+    ) async throws -> StorePurchaseResponse {
+        let urlString = "\(buyBaseURL)/WebObjects/MZBuy.woa/wa/buyProduct"
+        guard let url = URL(string: urlString) else {
+            throw StoreError.invalidResponse
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
@@ -418,7 +564,10 @@ class StoreRequest {
         httpResponse: HTTPURLResponse
     ) throws -> StorePurchaseResponse {
         if httpResponse.statusCode == 200 {
-            if plist["dialog"] != nil || plist["failureType"] != nil {
+            if let failureType = plist["failureType"] as? String, !failureType.isEmpty {
+                throw StoreError.fromFailureType(failureType)
+            }
+            if plist["dialog"] != nil {
                 throw StoreError.userInteractionRequired
             }
             let dsPersonId = plist["dsPersonID"] as? String ?? ""
@@ -432,7 +581,8 @@ class StoreRequest {
                 pings: pings
             )
         } else {
-            throw StoreError.fromFailureType(plist["failureType"] as? String ?? "unknownError")
+            let failureType = plist["failureType"] as? String ?? "unknownError"
+            throw StoreError.fromFailureType(failureType)
         }
     }
 }
@@ -454,6 +604,13 @@ public enum StoreError: Error, LocalizedError, Equatable {
     case keychainError
     case userInteractionRequired
     case invalidVerificationCode
+    case licenseExpired
+    case paymentVerificationRequired
+    case termsOfServiceUpdateRequired
+    case storefrontChangeRequired
+    case ageVerificationRequired
+    case tooManyRequests
+    case appNotAvailableInStorefront
 
     public var errorDescription: String? {
         switch self {
@@ -487,6 +644,20 @@ public enum StoreError: Error, LocalizedError, Equatable {
             return "需要在 App Store 完成一次身份验证/获取"
         case .invalidVerificationCode:
             return "验证码错误，请检查后重试"
+        case .licenseExpired:
+            return "许可证已过期，需要重新认证"
+        case .paymentVerificationRequired:
+            return "需要验证付款信息"
+        case .termsOfServiceUpdateRequired:
+            return "需要同意新的服务条款"
+        case .storefrontChangeRequired:
+            return "需要切换到正确的商店地区"
+        case .ageVerificationRequired:
+            return "需要进行年龄验证"
+        case .tooManyRequests:
+            return "请求过于频繁，请稍后再试"
+        case .appNotAvailableInStorefront:
+            return "此应用在当前地区商店不可用"
         case .unknownError:
             return "Unknown error occurred"
         }
@@ -506,6 +677,24 @@ public enum StoreError: Error, LocalizedError, Equatable {
             return .lockedAccount
         case "invalidVerificationCode":
             return .invalidVerificationCode
+        case "5002", "licenseExpired", "invalidLicense":
+            return .licenseExpired
+        case "2034", "paymentVerificationRequired":
+            return .paymentVerificationRequired
+        case "2056", "termsOfServiceUpdateRequired":
+            return .termsOfServiceUpdateRequired
+        case "storefrontChangeRequired", "100":
+            return .storefrontChangeRequired
+        case "ageVerificationRequired":
+            return .ageVerificationRequired
+        case "tooManyRequests", "rateLimitExceeded":
+            return .tooManyRequests
+        case "appNotAvailableInStorefront", "notAvailableInStorefront":
+            return .appNotAvailableInStorefront
+        case "invalidItem":
+            return .invalidItem
+        case "userInteractionRequired":
+            return .userInteractionRequired
         default:
             return .unknownError
         }
@@ -525,7 +714,14 @@ public enum StoreError: Error, LocalizedError, Equatable {
              (.lockedAccount, .lockedAccount),
              (.keychainError, .keychainError),
              (.userInteractionRequired, .userInteractionRequired),
-             (.invalidVerificationCode, .invalidVerificationCode):
+             (.invalidVerificationCode, .invalidVerificationCode),
+             (.licenseExpired, .licenseExpired),
+             (.paymentVerificationRequired, .paymentVerificationRequired),
+             (.termsOfServiceUpdateRequired, .termsOfServiceUpdateRequired),
+             (.storefrontChangeRequired, .storefrontChangeRequired),
+             (.ageVerificationRequired, .ageVerificationRequired),
+             (.tooManyRequests, .tooManyRequests),
+             (.appNotAvailableInStorefront, .appNotAvailableInStorefront):
             return true
         case (.networkError(let lhsError), .networkError(let rhsError)):
             return lhsError.localizedDescription == rhsError.localizedDescription

@@ -38,7 +38,7 @@ struct AccountSheetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("done".localized) {
+                    Button("back".localized) {
                         dismiss()
                     }
                     .font(.system(size: 17, weight: .semibold))

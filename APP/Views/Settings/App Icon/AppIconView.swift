@@ -22,6 +22,7 @@ extension Image {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: 64, height: 64)
+            .background(Color.white)
             .cornerRadius(13)
             .shadow(radius: 3)
             .padding(8)

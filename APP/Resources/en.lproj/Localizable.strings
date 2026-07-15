@@ -25,7 +25,7 @@
 "info" = "Info";
 "search" = "Search";
 "download" = "Download";
-"install" = "Install";
+"install" = "INSTALL";
 "update" = "Update";
 "more" = "More";
 "all" = "All";
@@ -52,6 +52,7 @@
 "appearance" = "Appearance";
 "theme" = "Theme";
 "color" = "Color";
+"pick_color" = "Pick Color";
 "icon" = "Icon";
 "language" = "Language";
 "general" = "General";
@@ -71,7 +72,6 @@
 "language_switch" = "Switch Language";
 "language_switch_message" = "The app interface will update immediately after switching languages. Some system components may require a restart to take full effect.";
 "confirm_switch" = "Confirm Switch";
-"app_icon" = "App Icon";
 "icon_default" = "Default";
 "icon_author" = "Icon";
 "icon_love" = "Love";
@@ -195,7 +195,7 @@
 
 // MARK: - App Detail
 "app_detail" = "App Details";
-"get" = "Get";
+"get" = "GET";
 "icloud_sync" = "iCloud Sync";
 "screenshots" = "Screenshots";
 "description" = "Description";
@@ -451,21 +451,20 @@
 
 // MARK: - App Detail More
 "feature_tags" = "Feature Tags";
-"free" = "Get";
-"get" = "Get";
+"free" = "GET";
 "view" = "View";
 "get_reviews_failed" = "Failed to get reviews: %@";
 "x_ratings" = "%@ Ratings";
 "age_rating" = "Age Rating";
 "x_languages" = "%@ Languages";
-"whats_new" = "What's New";
 "tech_info" = "Technical Info";
 "first_release" = "First Release";
-"last_updated" = "Last Updated";
 "requires_ios" = "Requires iOS %@ or later";
+"information" = "Information";
+"expand" = "Expand";
+"collapse" = "Collapse";
 
 // MARK: - Search More
-"search_placeholder" = "Search games, apps";
 "login" = "Sign In";
 "clear_all" = "Clear All";
 "x_results_found" = "%@ Results Found";
@@ -488,7 +487,6 @@
 "switch" = "Switch";
 "x_accounts" = "%@ Accounts";
 "add_new_account" = "Add New Account";
-"account_management" = "Account Management";
 "use_account" = "Use Account";
 "connection_lost" = "Connection Lost";
 "reconnecting" = "Reconnecting";
@@ -504,8 +502,6 @@
 "media_purchases_header" = "Media & Purchases";
 "sign_in_apple_id" = "Sign in to your iPhone";
 "sign_in_apple_id_desc" = "Use your Apple ID on this iPhone";
-"apple_id" = "Apple ID";
-"name" = "Name";
 "apple_id_email" = "Apple ID";
 "name_email_header" = "Name, Email";
 "account_identifier_header" = "Account Identifier";
@@ -575,7 +571,6 @@
 // MARK: - Account Detail
 "basic_info" = "Basic Information";
 "account_identifier" = "Account Identifier";
-"country_region" = "Country/Region";
 "password_token" = "Password Token";
 "auth_info" = "Authentication Info";
 "password_token_hint" = "The password token is used for automatic authentication. Please do not share it with others.";
@@ -590,3 +585,4 @@
 "quick_select" = "Quick Select";
 "auto" = "Auto";
 "unknown" = "Unknown";
+"no_screenshots" = "No Screenshots";

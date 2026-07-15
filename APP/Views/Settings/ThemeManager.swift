@@ -69,6 +69,17 @@ class ThemeManager: ObservableObject, @unchecked Sendable {
         accentColor = Color(hex: savedColorHex)
     }
 
+    var isDarkMode: Bool {
+        switch selectedTheme {
+        case .light:
+            return false
+        case .dark:
+            return true
+        case .system:
+            return UITraitCollection.current.userInterfaceStyle == .dark
+        }
+    }
+
     var backgroundColor: Color {
         switch selectedTheme {
         case .light:
@@ -83,6 +94,62 @@ class ThemeManager: ObservableObject, @unchecked Sendable {
                 return .white
             }
         }
+    }
+
+    var backgroundPrimary: Color {
+        adaptiveColor(light: Color(.systemBackground), dark: ModernDarkColors.backgroundPrimary)
+    }
+
+    var backgroundSecondary: Color {
+        adaptiveColor(light: Color(.secondarySystemBackground), dark: ModernDarkColors.backgroundSecondary)
+    }
+
+    var backgroundTertiary: Color {
+        adaptiveColor(light: Color(.tertiarySystemBackground), dark: ModernDarkColors.backgroundTertiary)
+    }
+
+    var surfacePrimary: Color {
+        adaptiveColor(light: Color(.systemBackground), dark: ModernDarkColors.surfacePrimary)
+    }
+
+    var surfaceSecondary: Color {
+        adaptiveColor(light: Color(.secondarySystemBackground), dark: ModernDarkColors.surfaceSecondary)
+    }
+
+    var borderPrimary: Color {
+        adaptiveColor(light: Color(.opaqueSeparator), dark: ModernDarkColors.borderPrimary)
+    }
+
+    var borderSecondary: Color {
+        adaptiveColor(light: Color(.separator), dark: ModernDarkColors.borderSecondary)
+    }
+
+    var textPrimary: Color {
+        adaptiveColor(light: Color(.label), dark: ModernDarkColors.textPrimary)
+    }
+
+    var textSecondary: Color {
+        adaptiveColor(light: Color(.secondaryLabel), dark: ModernDarkColors.textSecondary)
+    }
+
+    var textTertiary: Color {
+        adaptiveColor(light: Color(.tertiaryLabel), dark: ModernDarkColors.textTertiary)
+    }
+
+    var fillPrimary: Color {
+        adaptiveColor(light: Color(.systemFill), dark: ModernDarkColors.fillPrimary)
+    }
+
+    var fillSecondary: Color {
+        adaptiveColor(light: Color(.secondarySystemFill), dark: ModernDarkColors.fillSecondary)
+    }
+
+    var fillTertiary: Color {
+        adaptiveColor(light: Color(.tertiarySystemFill), dark: ModernDarkColors.fillTertiary)
+    }
+
+    private func adaptiveColor(light: Color, dark: Color) -> Color {
+        isDarkMode ? dark : light
     }
 
     func updateUserInterfaceStyle() {
@@ -114,11 +181,22 @@ class ThemeManager: ObservableObject, @unchecked Sendable {
 
 public struct ModernDarkColors {
     static let backgroundPrimary = Color(red: 0.07, green: 0.07, blue: 0.09)
+    static let backgroundSecondary = Color(red: 0.11, green: 0.11, blue: 0.13)
+    static let backgroundTertiary = Color(red: 0.15, green: 0.15, blue: 0.17)
+    
     static let surfacePrimary = Color(red: 0.12, green: 0.12, blue: 0.14)
     static let surfaceSecondary = Color(red: 0.18, green: 0.18, blue: 0.20)
+    
     static let borderPrimary = Color(red: 0.24, green: 0.24, blue: 0.26)
+    static let borderSecondary = Color(red: 0.32, green: 0.32, blue: 0.34)
+    
     static let textPrimary = Color.white
-    static let textSecondary = Color.gray
+    static let textSecondary = Color(red: 0.65, green: 0.65, blue: 0.67)
+    static let textTertiary = Color(red: 0.45, green: 0.45, blue: 0.47)
+    
+    static let fillPrimary = Color(red: 0.25, green: 0.25, blue: 0.27)
+    static let fillSecondary = Color(red: 0.20, green: 0.20, blue: 0.22)
+    static let fillTertiary = Color(red: 0.15, green: 0.15, blue: 0.17)
 }
 
 enum ThemeMode: String, CaseIterable {

@@ -732,9 +732,43 @@ class AppleIDAuthenticator: @unchecked Sendable {
     private var savedEmail: String = ""
     private var savedPassword: String = ""
     private var savedMFACode: String = ""
+    
+    private var attemptCount: Int = 0
+    
+    private static var lastFailureDate: Date? {
+        get { UserDefaults.standard.object(forKey: "AppleID_LastFailureDate") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "AppleID_LastFailureDate") }
+    }
+    
+    private static var consecutiveFailures: Int {
+        get { UserDefaults.standard.integer(forKey: "AppleID_ConsecutiveFailures") }
+        set { UserDefaults.standard.set(newValue, forKey: "AppleID_ConsecutiveFailures") }
+    }
+    
+    private static var cooldownInterval: TimeInterval {
+        let failures = consecutiveFailures
+        if failures >= 10 { return 86400 }     // 24小时（账户锁定级别）
+        if failures >= 7 { return 21600 }      // 6小时
+        if failures >= 5 { return 3600 }       // 1小时
+        if failures >= 3 { return 900 }        // 15分钟
+        if failures >= 2 { return 300 }        // 5分钟
+        return 0
+    }
 
     private let clientId: String
     private let urlSession: URLSession
+    
+    private static var deviceGUID: String {
+        get {
+            if let guid = UserDefaults.standard.string(forKey: "AppleID_DeviceGUID") {
+                return guid
+            }
+            let guid = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).uppercased()
+            let guidStr = String(guid)
+            UserDefaults.standard.set(guidStr, forKey: "AppleID_DeviceGUID")
+            return guidStr
+        }
+    }
 
     private init() {
         self.clientId = "auth-\(UUID().uuidString.lowercased())"
@@ -752,6 +786,12 @@ class AppleIDAuthenticator: @unchecked Sendable {
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
         self.urlSession = URLSession(configuration: config, delegate: SRPURLSessionDelegate.shared, delegateQueue: delegateQueue)
+    }
+
+    private func randomDelay(minSeconds: TimeInterval, _ maxSeconds: TimeInterval) async {
+        let delay = TimeInterval.random(in: minSeconds...maxSeconds)
+        print("⏱️ [模拟延迟] 等待 \(String(format: "%.2f", delay)) 秒")
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
     }
 
     private func parseSetCookieHeader(_ header: String) {
@@ -791,19 +831,27 @@ class AppleIDAuthenticator: @unchecked Sendable {
         let clientId = AppleAuthEndpoint.oAuthClientId
         let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15"
 
+        let timeZone = TimeZone.current.identifier
+        let language = Locale.preferredLanguages.first ?? "en-US"
+
         let fdClientInfo = [
             "U": userAgent,
-            "L": "en-US",
-            "Z": "GMT+00:00",
+            "L": language,
+            "Z": timeZone,
             "V": "1.1",
             "F": ""
         ] as [String: Any]
         let fdClientInfoJSON = (try? JSONSerialization.data(withJSONObject: fdClientInfo)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
 
+        let guid = Self.deviceGUID
+
         var headers: [String: String] = [
-            "Accept": "application/json, text/javascript",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": language,
+            "Accept-Encoding": "gzip, deflate, br",
             "Content-Type": "application/json",
             "User-Agent": userAgent,
+            "X-Apple-GUID": guid,
             "X-Apple-OAuth-Client-Id": clientId,
             "X-Apple-OAuth-Client-Type": "firstPartyAuth",
             "X-Apple-OAuth-Redirect-URI": "https://www.icloud.com",
@@ -814,7 +862,13 @@ class AppleIDAuthenticator: @unchecked Sendable {
             "X-Apple-Widget-Key": clientId,
             "X-Apple-FD-Client-Info": fdClientInfoJSON,
             "X-Apple-Frame-Id": self.clientId,
-            "Referer": "https://idmsa.apple.com",
+            "X-Apple-Subject": "software",
+            "X-Apple-P12-FullClientVersion": "0",
+            "Origin": "https://idmsa.apple.com",
+            "Referer": "https://idmsa.apple.com/",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
         ]
 
         if let scnt = sessionData["scnt"] {
@@ -935,6 +989,20 @@ class AppleIDAuthenticator: @unchecked Sendable {
     ) async throws -> StoreAuthResponse {
         print("🔐 [SRP认证] 开始 SRP 认证流程")
         print("📧 [SRP认证] Apple ID: \(email)")
+        
+        let cooldown = Self.cooldownInterval
+        if cooldown > 0, let lastFail = Self.lastFailureDate {
+            let elapsed = Date().timeIntervalSince(lastFail)
+            if elapsed < cooldown {
+                let remaining = Int(cooldown - elapsed)
+                let minutes = remaining / 60
+                let seconds = remaining % 60
+                print("⚠️ [风控保护] 登录失败次数过多，请等待 \(minutes)分\(seconds)秒 后重试")
+                throw StoreError.lockedAccount
+            }
+        }
+        
+        attemptCount = 0
 
         savedEmail = email
         savedPassword = password
@@ -965,6 +1033,8 @@ class AppleIDAuthenticator: @unchecked Sendable {
         } catch {
             print("⚠️ [SRP认证] authorize/signin 失败，继续执行: \(error.localizedDescription)")
         }
+
+        await randomDelay(minSeconds: 0.5, 1.5)
 
         print("🔐 [SRP认证] 步骤1: POST /signin/init")
 
@@ -1045,6 +1115,8 @@ class AppleIDAuthenticator: @unchecked Sendable {
             throw StoreError.authenticationFailed
         }
         print("🔐 [SRP认证] M1=\(m1.count)B, M2=\(m2.count)B")
+
+        await randomDelay(minSeconds: 0.8, 2.0)
 
         var completeData: [String: Any] = [
             "accountName": email,
@@ -1156,10 +1228,33 @@ class AppleIDAuthenticator: @unchecked Sendable {
         }
 
         print("🔐 [SRP认证] 步骤3: 使用 session token 获取账户信息")
-        let storeAuthResponse = try await authenticateWithToken(isChinaMainland: isChinaMainland)
-
-        print("✅ [SRP认证] 认证流程完成")
-        return storeAuthResponse
+        await randomDelay(minSeconds: 0.5, 1.2)
+        do {
+            let storeAuthResponse = try await authenticateWithToken(isChinaMainland: isChinaMainland)
+            Self.consecutiveFailures = 0
+            Self.lastFailureDate = nil
+            print("✅ [SRP认证] 认证流程完成")
+            return storeAuthResponse
+        } catch let error as StoreError {
+            switch error {
+            case .lockedAccount:
+                Self.consecutiveFailures = 10
+                Self.lastFailureDate = Date()
+                print("🚫 [风控保护] 账户已被锁定，设置长冷却时间")
+            case .invalidCredentials, .invalidVerificationCode, .accountNotFound:
+                Self.consecutiveFailures += 1
+                Self.lastFailureDate = Date()
+                print("⚠️ [风控保护] 认证失败，连续失败次数: \(Self.consecutiveFailures)")
+            default:
+                break
+            }
+            throw error
+        } catch {
+            Self.consecutiveFailures += 1
+            Self.lastFailureDate = Date()
+            print("❌ [SRP认证] 认证失败，连续失败次数: \(Self.consecutiveFailures)")
+            throw error
+        }
     }
 
     func trigger2FAPush(isChinaMainland: Bool = false) async -> Bool {
@@ -1212,6 +1307,9 @@ class AppleIDAuthenticator: @unchecked Sendable {
                 print("✅ [2FA] 验证码验证成功 (状态码: \(httpResponse.statusCode))")
             } else {
                 print("❌ [2FA] 验证码验证失败: \(httpResponse.statusCode)")
+                Self.consecutiveFailures += 1
+                Self.lastFailureDate = Date()
+                print("⚠️ [风控保护] 2FA验证失败，连续失败次数: \(Self.consecutiveFailures)")
                 if let parsedError = parseServiceErrors(from: responseData) {
                     throw parsedError
                 }
@@ -1221,9 +1319,19 @@ class AppleIDAuthenticator: @unchecked Sendable {
                 throw StoreError.invalidCredentials
             }
         } catch let error as StoreError {
+            switch error {
+            case .codeRequired:
+                break
+            default:
+                Self.consecutiveFailures += 1
+                Self.lastFailureDate = Date()
+                print("⚠️ [风控保护] 2FA验证异常，连续失败次数: \(Self.consecutiveFailures)")
+            }
             throw error
         } catch {
             print("❌ [2FA] 验证码验证异常: \(error.localizedDescription)")
+            Self.consecutiveFailures += 1
+            Self.lastFailureDate = Date()
             throw StoreError.invalidCredentials
         }
 
@@ -1334,14 +1442,15 @@ class AppleIDAuthenticator: @unchecked Sendable {
 
     private func getStoreCredentials(dsPersonId: String, isChinaMainland: Bool = false) async throws -> StoreAuthResponse {
 
-        let guid = "A1B2C3D4E5F6"
-
+        let guid = Self.deviceGUID
         StoreRequest.setGUID(guid)
 
         let passwordWithMFA = savedPassword + savedMFACode.replacingOccurrences(of: " ", with: "")
 
         let urlString = "https://auth.itunes.apple.com/auth/v1/native/fast/"
         let storeUrl = URL(string: urlString)!
+
+        let language = Locale.preferredLanguages.first ?? "en-US"
 
         var request = URLRequest(url: storeUrl)
         request.httpMethod = "POST"
@@ -1350,12 +1459,19 @@ class AppleIDAuthenticator: @unchecked Sendable {
 
         request.setValue("Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6", forHTTPHeaderField: "User-Agent")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
-        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        request.setValue(language, forHTTPHeaderField: "Accept-Language")
+        request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
+        
+        request.setValue(guid, forHTTPHeaderField: "X-Apple-GUID")
+        request.setValue("0", forHTTPHeaderField: "X-Apple-P12-FullClientVersion")
+        request.setValue("software", forHTTPHeaderField: "X-Apple-Subject")
+        request.setValue("4.0.0", forHTTPHeaderField: "iCloud-Control")
 
         var formComponents: [String] = []
+        attemptCount += 1
         let formParams: [(String, String)] = [
             ("appleId", savedEmail),
-            ("attempt", "1"),
+            ("attempt", "\(attemptCount)"),
             ("guid", guid),
             ("password", passwordWithMFA),
             ("rmp", "0"),
@@ -1469,13 +1585,14 @@ class AppleIDAuthenticator: @unchecked Sendable {
         )
     }
 
-        func resetSession() {
+    func resetSession() {
         sessionData = [:]
         cookies = [:]
         srpClient = nil
         savedEmail = ""
         savedPassword = ""
         savedMFACode = ""
+        attemptCount = 0
     }
 }
 

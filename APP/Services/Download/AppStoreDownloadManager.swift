@@ -324,6 +324,7 @@ class AppStoreDownloadManager: NSObject, ObservableObject, URLSessionDownloadDel
         let storeItem: DownloadStoreItem
         let bytesDownloaded: Int64
         let totalBytes: Int64
+        let resumeDataPath: String?
     }
     
     private override init() {
@@ -353,20 +354,86 @@ class AppStoreDownloadManager: NSObject, ObservableObject, URLSessionDownloadDel
     private func persistContext(for downloadId: String, bytesDownloaded: Int64 = 0, totalBytes: Int64 = 0) {
         guard let destination = downloadDestinations[downloadId],
               let storeItem = downloadStoreItems[downloadId] else { return }
-        
+
+        var resumeDataPath: String? = nil
+        if let resumeData = resumeDataStore[downloadId] {
+            resumeDataPath = saveResumeData(resumeData, for: downloadId)
+        }
+
         let context = DownloadContext(
             downloadId: downloadId,
             destinationPath: destination.path,
             storeItem: storeItem,
             bytesDownloaded: bytesDownloaded,
-            totalBytes: totalBytes
+            totalBytes: totalBytes,
+            resumeDataPath: resumeDataPath
         )
         persistedContexts[downloadId] = context
         savePersistedContexts()
     }
-    
+
+    private func resumeDataPath(for downloadId: String) -> URL {
+        let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let resumeDir = documentsDir.appendingPathComponent("ResumeData", isDirectory: true)
+        try? FileManager.default.createDirectory(at: resumeDir, withIntermediateDirectories: true)
+        return resumeDir.appendingPathComponent("\(downloadId).resume")
+    }
+
+    private func saveResumeData(_ data: Data, for downloadId: String) -> String {
+        let path = resumeDataPath(for: downloadId)
+        do {
+            try data.write(to: path)
+            return path.path
+        } catch {
+            print("❌ [断点续传] 保存续传数据失败: \(error.localizedDescription)")
+            return path.path
+        }
+    }
+
+    private func loadResumeData(for downloadId: String) -> Data? {
+        let path = resumeDataPath(for: downloadId)
+        guard let data = try? Data(contentsOf: path) else {
+            return nil
+        }
+        return data
+    }
+
+    private func deleteResumeData(for downloadId: String) {
+        let path = resumeDataPath(for: downloadId)
+        try? FileManager.default.removeItem(at: path)
+    }
+
+    private func checkPartialFile(for downloadId: String) -> Int64? {
+        guard let destinationURL = downloadDestinations[downloadId] else { return nil }
+        let tempPath = destinationURL.path + ".download"
+        guard FileManager.default.fileExists(atPath: tempPath) else { return nil }
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: tempPath)
+            return attrs[.size] as? Int64
+        } catch {
+            return nil
+        }
+    }
+
+    private func verifyDownloadedFile(downloadId: String, fileURL: URL, expectedMD5: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("❌ [文件校验] 文件不存在: \(fileURL.path)")
+            return false
+        }
+
+        print("🔍 [文件校验] 开始校验文件 MD5...")
+        let isValid = verifyFileIntegrity(fileURL: fileURL, expectedMD5: expectedMD5)
+        if isValid {
+            print("✅ [文件校验] MD5 校验通过")
+        } else {
+            print("❌ [文件校验] MD5 校验失败")
+        }
+        return isValid
+    }
+
     private func removePersistedContext(for downloadId: String) {
         persistedContexts.removeValue(forKey: downloadId)
+        deleteResumeData(for: downloadId)
         savePersistedContexts()
     }
     
@@ -650,7 +717,6 @@ class AppStoreDownloadManager: NSObject, ObservableObject, URLSessionDownloadDel
         print("🚀 [下载开始] 任务ID: \(downloadId)")
         var request = URLRequest(url: downloadURL)
 
-        request.setValue("bytes=0-", forHTTPHeaderField: "Range")
         request.setValue("keep-alive", forHTTPHeaderField: "Connection")
         request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
@@ -660,8 +726,12 @@ class AppStoreDownloadManager: NSObject, ObservableObject, URLSessionDownloadDel
         if let resumeData = resumeDataStore[downloadId] {
             downloadTask = urlSession.downloadTask(withResumeData: resumeData)
             resumeDataStore.removeValue(forKey: downloadId)
-            print("🔄 [下载恢复] 使用断点续传数据恢复下载")
+            print("🔄 [下载恢复] 使用内存中的断点续传数据恢复下载")
+        } else if let savedResumeData = loadResumeData(for: downloadId) {
+            downloadTask = urlSession.downloadTask(withResumeData: savedResumeData)
+            print("🔄 [下载恢复] 使用磁盘中的断点续传数据恢复下载")
         } else {
+            request.setValue("bytes=0-", forHTTPHeaderField: "Range")
             downloadTask = urlSession.downloadTask(with: request)
         }
 
@@ -927,6 +997,17 @@ extension AppStoreDownloadManager {
 
             try FileManager.default.moveItem(at: location, to: destinationURL)
             print("✅ [文件移动] 成功移动到: \(destinationURL.path)")
+
+            if !storeItem.md5.isEmpty {
+                let isValid = verifyDownloadedFile(
+                    downloadId: downloadId,
+                    fileURL: destinationURL,
+                    expectedMD5: storeItem.md5
+                )
+                if !isValid {
+                    print("⚠️ [文件校验] MD5 校验失败，但继续处理（如需重试请手动重新下载）")
+                }
+            }
 
             let result = DownloadResult(
                 downloadId: downloadId,

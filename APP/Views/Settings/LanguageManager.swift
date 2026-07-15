@@ -184,6 +184,21 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .ca: return "🇦🇩"
         }
     }
+    
+    var isRTL: Bool {
+        switch self {
+        case .ar, .he:
+            return true
+        case .system:
+            return UIApplication.shared.userInterfaceLayoutDirection == .rightToLeft
+        default:
+            return false
+        }
+    }
+    
+    var layoutDirection: LayoutDirection {
+        isRTL ? .rightToLeft : .leftToRight
+    }
 }
 
 final class LanguageManager: ObservableObject {
@@ -241,6 +256,27 @@ final class LanguageManager: ObservableObject {
             return NSLocalizedString(key, comment: "")
         }
         return NSLocalizedString(key, bundle: bundle, comment: "")
+    }
+    
+    static func localized(_ key: String, _ arguments: CVarArg...) -> String {
+        let format = localized(key)
+        return String(format: format, locale: shared.locale, arguments: arguments)
+    }
+    
+    static func localized(_ key: String, arguments: [String: String]) -> String {
+        var result = localized(key)
+        for (key, value) in arguments {
+            result = result.replacingOccurrences(of: "{\(key)}", with: value)
+        }
+        return result
+    }
+    
+    var isRTL: Bool {
+        currentLanguage.isRTL
+    }
+    
+    var layoutDirection: LayoutDirection {
+        currentLanguage.layoutDirection
     }
 
     var locale: Locale {
@@ -318,5 +354,13 @@ final class LanguageManager: ObservableObject {
 extension String {
     var localized: String {
         LanguageManager.localized(self)
+    }
+    
+    func localized(_ arguments: CVarArg...) -> String {
+        LanguageManager.localized(self, arguments)
+    }
+    
+    func localized(arguments: [String: String]) -> String {
+        LanguageManager.localized(self, arguments: arguments)
     }
 }

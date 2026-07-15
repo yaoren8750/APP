@@ -148,14 +148,27 @@ class iTunesClient: @unchecked Sendable {
               let html = String(data: data, encoding: .utf8) else {
             throw SearchError.invalidResponse
         }
-        let pattern = #"token%22%3A%22([^%]+)%22%7D"#
-        let regex = try NSRegularExpression(pattern: pattern, options: [])
-        let range = NSRange(location: 0, length: html.utf16.count)
-        guard let match = regex.firstMatch(in: html, options: [], range: range), match.numberOfRanges >= 2,
-              let tokenRange = Range(match.range(at: 1), in: html) else {
-            throw SearchError.invalidResponse
+
+        let patterns = [
+            #"token%22%3A%22([^%]+)%22%7D"#,
+            #""token":"([^"]+)""#,
+            #"token%22%3A%22([a-zA-Z0-9_\-]+)\"#,
+            #"media-api.*?token.*?([a-zA-Z0-9_\.]{50,})"#
+        ]
+
+        for pattern in patterns {
+            let regex = try? NSRegularExpression(pattern: pattern, options: [])
+            let range = NSRange(location: 0, length: html.utf16.count)
+            if let match = regex?.firstMatch(in: html, options: [], range: range), match.numberOfRanges >= 2,
+               let tokenRange = Range(match.range(at: 1), in: html) {
+                let token = String(html[tokenRange])
+                if !token.isEmpty {
+                    return token
+                }
+            }
         }
-        return String(html[tokenRange])
+
+        throw SearchError.invalidResponse
     }
 
     func search(
@@ -327,13 +340,14 @@ class iTunesClient: @unchecked Sendable {
         }
     }
 
-    func versionHistory(id: Int, country: String = "") async throws -> [AppVersionInfo] {
+    func versionHistory(id: Int, country: String = "US") async throws -> [AppVersionInfo] {
+        let countryCode = country.isEmpty ? "US" : country
 
-        if let versions = try? await fetchVersionHistoryFromAMPApi(id: id, country: country) {
+        if let versions = try? await fetchVersionHistoryFromAMPApi(id: id, country: countryCode) {
             return versions
         }
 
-        if let versions = try? await fetchVersionHistoryFromLookupApi(id: id, country: country) {
+        if let versions = try? await fetchVersionHistoryFromLookupApi(id: id, country: countryCode) {
             return versions
         }
 
@@ -342,11 +356,15 @@ class iTunesClient: @unchecked Sendable {
 
     private func fetchVersionHistoryFromAMPApi(id: Int, country: String) async throws -> [AppVersionInfo] {
         let token = try await fetchAMPTargetToken(country: country, appId: id)
-        let url = URL(string: "https://amp-api-edge.apps.apple.com/v1/catalog/\(country)/apps/\(id)?platform=web&extend=versionHistory")!
+        let urlString = "https://amp-api-edge.apps.apple.com/v1/catalog/\(country.lowercased())/apps/\(id)?platform=web&extend=versionHistory"
+        guard let url = URL(string: urlString) else {
+            throw SearchError.invalidResponse
+        }
 
         var request = URLRequest(url: url)
         request.setValue("https://apps.apple.com", forHTTPHeaderField: "Origin")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
@@ -360,14 +378,26 @@ class iTunesClient: @unchecked Sendable {
             throw SearchError.invalidResponse
         }
 
-        if let platformAttrs = attributes["platformAttributes"] as? [String: Any],
-           let ios = platformAttrs["ios"] as? [String: Any],
-           let versions = ios["versionHistory"] as? [Any], !versions.isEmpty {
-            return try parseVersionHistory(from: versions)
+        if let platformAttrs = attributes["platformAttributes"] as? [String: Any] {
+            for platformKey in ["ios", "iPhone OS", "ipad", "appleTV", "mac"] {
+                if let platform = platformAttrs[platformKey] as? [String: Any],
+                   let versions = platform["versionHistory"] as? [Any], !versions.isEmpty {
+                    return try parseVersionHistory(from: versions)
+                }
+            }
         }
 
         if let versions = attributes["versionHistory"] as? [Any], !versions.isEmpty {
             return try parseVersionHistory(from: versions)
+        }
+
+        if let relationships = attributes["platformAttributes"] as? [String: Any] ?? attributes["relationships"] as? [String: Any] {
+            for (_, value) in relationships {
+                if let dict = value as? [String: Any],
+                   let versions = dict["versionHistory"] as? [Any], !versions.isEmpty {
+                    return try parseVersionHistory(from: versions)
+                }
+            }
         }
 
         throw SearchError.invalidResponse

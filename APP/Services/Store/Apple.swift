@@ -16,6 +16,9 @@ public struct Account: Codable, Identifiable {
     public let countryCode: String
 
     public let storeResponse: AccountStoreResponse
+
+    public var deviceGUID: String
+
     public init(
         name: String,
         email: String,
@@ -26,7 +29,8 @@ public struct Account: Codable, Identifiable {
         dsPersonId: String,
         cookies: [String] = [],
         countryCode: String = "",
-        storeResponse: AccountStoreResponse
+        storeResponse: AccountStoreResponse,
+        deviceGUID: String = ""
     ) {
         self.name = name
         self.email = email
@@ -38,6 +42,16 @@ public struct Account: Codable, Identifiable {
         self.cookies = cookies
         self.countryCode = countryCode
         self.storeResponse = storeResponse
+        if deviceGUID.isEmpty {
+            self.deviceGUID = Account.generateDeviceGUID()
+        } else {
+            self.deviceGUID = deviceGUID
+        }
+    }
+
+    private static func generateDeviceGUID() -> String {
+        let guid = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).uppercased()
+        return String(guid)
     }
 
     public struct AccountStoreResponse: Codable {
@@ -61,6 +75,7 @@ public struct Account: Codable, Identifiable {
         case cookies = "c"
         case countryCode = "cc"
         case storeResponse = "sr"
+        case deviceGUID = "guid"
     }
 }
 

@@ -27,14 +27,15 @@ struct SettingsView: View {
     @State private var showingIconSuccess = false
     @State private var isIconLoading = false
     @State private var showAccountSheet = false
+    @State private var showingColorPicker = false
 
     private var selectedStyle: Binding<UIUserInterfaceStyle> {
         Binding(
             get: {
                 switch themeManager.selectedTheme {
-            case .system: return .unspecified
-            case .light: return .light
-            case .dark: return .dark
+                case .system: return .unspecified
+                case .light: return .light
+                case .dark: return .dark
                 }
             },
             set: { newStyle in
@@ -91,18 +92,20 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                accountHeaderSection
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 16, leading: 0, bottom: 16, trailing: 0))
-
-                appearanceSection
-                languageSection
-                iconSection
+            ScrollView {
+                VStack(spacing: 20) {
+                    accountHeaderSection
+                    appearanceSection
+                    languageSection
+                    iconSection
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("")
+            .background(Color(.systemGroupedBackground))
             .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
             .onAppear {
                 selectedColor = Color(hex: selectedColorHex)
                 currentIcon = UIApplication.shared.alternateIconName
@@ -167,7 +170,8 @@ struct SettingsView: View {
                         .foregroundColor(.secondary.opacity(0.6))
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.vertical, 16)
+                .contentShape(Rectangle())
             } else {
                 HStack(spacing: 16) {
                     Image(systemName: "person.circle.fill")
@@ -192,10 +196,13 @@ struct SettingsView: View {
                         .foregroundColor(.secondary.opacity(0.6))
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.vertical, 16)
+                .contentShape(Rectangle())
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScaleButtonStyle())
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(16)
     }
 
     private func flag(country: String) -> String {
@@ -226,114 +233,189 @@ struct SettingsView_Previews: PreviewProvider {
 extension SettingsView {
     @ViewBuilder
     private var appearanceSection: some View {
-        Section {
-            Picker("appearance".localized, selection: selectedStyle) {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("appearance".localized)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
+            VStack(spacing: 0) {
+                appearanceRow
+                Divider()
+                    .padding(.leading, 52)
+                colorRow
+            }
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+        }
+    }
+
+    private var appearanceRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "moon.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle()
+                            .fill(themeManager.accentColor)
+                    )
+
+                Text("appearance".localized)
+                    .font(.system(size: 16))
+                    .foregroundColor(.primary)
+
+                Spacer()
+            }
+
+            Picker("", selection: selectedStyle) {
                 ForEach(UIUserInterfaceStyle.allStyles, id: \.self) { style in
                     Text(style.displayName)
                         .tag(style)
                 }
             }
             .pickerStyle(.segmented)
-        } header: {
-            Text("appearance".localized)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
 
-        Section {
-            HStack {
-                Label("".localized, systemImage: "paintpalette.fill")
-                    .foregroundStyle(themeManager.accentColor)
-
-                Spacer()
-
+    private var colorRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: {
+                showingColorPicker = true
+            }) {
                 HStack(spacing: 12) {
-                    Circle()
-                        .fill(selectedColor)
-                        .frame(width: 28, height: 28)
-                        .overlay(
-                            Circle()
-                                .strokeBorder(Color.primary.opacity(0.2), lineWidth: 2)
-                        )
+                    ZStack {
+                        Circle()
+                            .fill(selectedColor)
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(Color.primary.opacity(0.2), lineWidth: 1)
+                            )
+                        
+                        Image(systemName: "eyedropper")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
+                    }
 
-                    Text(selectedColorHex)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("color".localized)
+                            .font(.system(size: 16))
+                            .foregroundColor(.primary)
+                        
+                        Text(selectedColorHex)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .sheet(isPresented: $showingColorPicker) {
+                ColorPickerView(selectedColor: $selectedColor)
+            }
+            .onChange(of: selectedColor) { newColor in
+                selectedColorHex = newColor.toHex()
+                themeManager.accentColor = newColor
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     ForEach(presetColors, id: \.self) { color in
                         Circle()
                             .fill(color)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 32, height: 32)
                             .overlay(
                                 Circle()
                                     .strokeBorder(
                                         selectedColor == color ? Color.primary : Color.clear,
-                                        lineWidth: 3
+                                        lineWidth: 2.5
                                     )
                             )
                             .overlay(
                                 selectedColor == color ?
                                 Image(systemName: "checkmark")
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold))
                                     .foregroundColor(.white)
                                     .background(
                                         Circle()
-                                            .fill(Color.black.opacity(0.4))
-                                            .frame(width: 20, height: 20)
+                                            .fill(Color.primary.opacity(0.3))
+                                            .frame(width: 18, height: 18)
                                     ) : nil
                             )
                             .onTapGesture {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                     selectedColor = color
                                     selectedColorHex = color.toHex()
+                                    themeManager.accentColor = color
                                 }
                                 let impactFeedback = UIImpactFeedbackGenerator(style: .light)
                                 impactFeedback.impactOccurred()
                             }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 2)
             }
-            .listRowInsets(EdgeInsets())
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        } header: {
-            Text("color".localized)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private var iconSection: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("icon".localized)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 ForEach(allIcons) { icon in
                     iconItem(icon: icon)
                 }
             }
-            .padding(.vertical, 8)
-            .listRowInsets(EdgeInsets())
             .padding(.horizontal, 16)
-        } header: {
-            Text("icon".localized)
+            .padding(.vertical, 16)
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
         }
     }
 
     private var languageSection: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("general".localized)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
             NavigationLink(destination: LanguageSettingsView().environmentObject(themeManager)) {
                 HStack(spacing: 12) {
                     Image(systemName: "globe")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.white)
                         .frame(width: 28, height: 28)
                         .background(
                             Circle()
-                                .fill(Color.blue.opacity(0.12))
+                                .fill(themeManager.accentColor)
                         )
 
                     Text("language".localized)
-                        .font(.system(size: 15))
+                        .font(.system(size: 16))
                         .foregroundColor(.primary)
 
                     Spacer()
@@ -344,10 +426,16 @@ extension SettingsView {
                             .font(.system(size: 14))
                             .foregroundColor(.secondary)
                     }
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
-        } header: {
-            Text("general".localized)
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
         }
     }
 
@@ -378,7 +466,7 @@ extension SettingsView {
 
                 VStack(alignment: .center, spacing: 2) {
                     Text(icon.displayName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .multilineTextAlignment(.center)
                         .foregroundColor(.primary)
                     Text(icon.author)
@@ -388,10 +476,9 @@ extension SettingsView {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .padding(.vertical, 8)
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScaleButtonStyle())
     }
 }

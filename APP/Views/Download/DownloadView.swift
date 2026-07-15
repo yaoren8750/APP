@@ -8,78 +8,6 @@ import Combine
 import Foundation
 import Network
 
-final class ImageCache {
-    static let shared = ImageCache()
-    private let cache = NSCache<NSString, UIImage>()
-
-    private init() {
-        cache.countLimit = 100
-        cache.totalCostLimit = 50 * 1024 * 1024
-    }
-
-    func image(for url: String) -> UIImage? {
-        cache.object(forKey: url as NSString)
-    }
-
-    func setImage(_ image: UIImage, for url: String) {
-        let cost = Int(image.size.width * image.size.height * 4)
-        cache.setObject(image, forKey: url as NSString, cost: cost)
-    }
-}
-
-struct CachedAsyncImage: SwiftUI.View {
-    let urlString: String?
-    let placeholder: SwiftUI.Image
-
-    @State private var image: UIImage?
-    @State private var isLoading = false
-
-    init(url: String?, @ViewBuilder placeholder: () -> SwiftUI.Image = { SwiftUI.Image(systemName: "app.fill") }) {
-        self.urlString = url
-        self.placeholder = placeholder()
-    }
-
-    var body: some SwiftUI.View {
-        Group {
-            if let uiImage = image {
-                SwiftUI.Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                placeholder
-                    .foregroundColor(.secondary)
-            }
-        }
-        .onAppear { loadImage() }
-        .onChange(of: urlString) { _ in loadImage() }
-    }
-
-    private func loadImage() {
-        guard let urlStr = urlString, !urlStr.isEmpty, let url = URL(string: urlStr) else {
-            image = nil
-            return
-        }
-
-        if let cached = ImageCache.shared.image(for: urlStr) {
-            image = cached
-            return
-        }
-
-        guard !isLoading else { return }
-        isLoading = true
-
-        URLSession.shared.dataTask(with: url) { data, _, error in
-            DispatchQueue.main.async {
-                isLoading = false
-                if let data = data, let uiImage = UIImage(data: data), error == nil {
-                    ImageCache.shared.setImage(uiImage, for: urlStr)
-                    image = uiImage
-                }
-            }
-        }.resume()
-    }
-}
-
 #if canImport(UIKit)
 import UIKit
 import SafariServices
@@ -178,9 +106,18 @@ class HTTPServerManager: ObservableObject, @unchecked Sendable {
 
 struct ModernCard<Content: SwiftUI.View>: SwiftUI.View {
     let content: Content
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
 
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
+    }
+
+    private var shadowColor: Color {
+        colorScheme == .dark ? Color.black.opacity(0.5) : Color.black.opacity(0.1)
+    }
+
+    private var shadowRadius: CGFloat {
+        colorScheme == .dark ? 12 : 8
     }
 
     var body: some SwiftUI.View {
@@ -188,10 +125,10 @@ struct ModernCard<Content: SwiftUI.View>: SwiftUI.View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(.systemBackground))
+                    .fill(Color(.secondarySystemBackground))
                     .shadow(
-                        color: Color.black.opacity(0.1),
-                        radius: 8,
+                        color: shadowColor,
+                        radius: shadowRadius,
                         x: 0,
                         y: 4
                     )
@@ -939,9 +876,15 @@ struct DownloadView: SwiftUI.View {
     @State private var showSafariWebView = false
     @State private var safariURL: URL? = nil
     @State private var showIPAFilesView = false
+    @State private var isScrollingFast = false
+    @State private var scrollVelocity: CGFloat = 0
 
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject private var globalInstallManager: GlobalInstallationManager
+    
+    @State private var lastScrollOffset: CGFloat = 0
+    @State private var lastScrollTime: Date = Date()
 
     var body: some SwiftUI.View {
         ZStack {
@@ -979,7 +922,7 @@ struct DownloadView: SwiftUI.View {
                     .padding()
                     .background(LinearGradient(colors: [Color.blue, Color.purple], startPoint: .leading, endPoint: .trailing))
                     .clipShape(Circle())
-                    .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
+                    .shadow(color: colorScheme == .dark ? Color.black.opacity(0.6) : Color.black.opacity(0.3), radius: colorScheme == .dark ? 12 : 8, x: 0, y: 4)
                     .padding()
             }
             .animation(.spring(), value: animateCards)
@@ -1036,22 +979,157 @@ struct DownloadView: SwiftUI.View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 24)
+            .background(
+                GeometryReader { geometry in
+                    Color.clear
+                        .preference(key: DownloadScrollOffsetPreferenceKey.self, value: geometry.frame(in: .named("downloadScroll")).origin.y)
+                }
+            )
+            .onPreferenceChange(DownloadScrollOffsetPreferenceKey.self) { value in
+                detectScrollVelocity(offset: value)
+            }
         }
+        .coordinateSpace(name: "downloadScroll")
+    }
+    
+    private func detectScrollVelocity(offset: CGFloat) {
+        let now = Date()
+        let timeDiff = now.timeIntervalSince(lastScrollTime)
+        
+        if timeDiff > 0 {
+            let offsetDiff = abs(offset - lastScrollOffset)
+            let velocity = offsetDiff / timeDiff
+            scrollVelocity = velocity
+            
+            let fastThreshold: CGFloat = 800
+            let isFast = velocity > fastThreshold
+            
+            if isFast != isScrollingFast {
+                withAnimation(.easeInOut(duration: 0.1)) {
+                    isScrollingFast = isFast
+                }
+            }
+        }
+        
+        lastScrollOffset = offset
+        lastScrollTime = now
     }
 
 
 
     private var downloadRequestsView: some SwiftUI.View {
-        ForEach(Array(vm.downloadRequests.enumerated()), id: \.element.id) { enumeratedItem in
-            let index = enumeratedItem.offset
-            let request = enumeratedItem.element
+        ForEach(vm.sortedDownloadRequests.indices, id: \.self) { index in
+            let request = vm.sortedDownloadRequests[index]
             DownloadCardView(
-                request: request
+                request: request,
+                isPreview: isScrollingFast
             )
             .scaleEffect(animateCards ? 1 : 0.9)
             .opacity(animateCards ? 1 : 0)
             .animation(Animation.spring().delay(Double(index) * 0.1), value: animateCards)
+            .animation(nil, value: isScrollingFast)
+            .id(request.id)
+            .swipeActions(
+                makeSwipeActions(for: request)
+            )
         }
+    }
+
+    private func makeSwipeActions(for request: DownloadRequest) -> [SwipeAction] {
+        var actions: [SwipeAction] = []
+
+        if request.runtime.status == .completed,
+           let localFilePath = request.localFilePath,
+           FileManager.default.fileExists(atPath: localFilePath) {
+            actions.append(
+                SwipeAction(
+                    title: "share".localized,
+                    systemImage: "square.and.arrow.up",
+                    backgroundColor: .blue
+                ) {
+                    shareIPAFile(path: localFilePath, name: request.package.name)
+                }
+            )
+        }
+
+        actions.append(
+            SwipeAction(
+                title: "delete".localized,
+                systemImage: "trash",
+                backgroundColor: .red
+            ) {
+                UnifiedDownloadManager.shared.deleteDownload(request: request)
+                UnifiedDownloadManager.shared.saveDownloadTasks()
+                
+                if let localFilePath = request.localFilePath, FileManager.default.fileExists(atPath: localFilePath) {
+                    do {
+                        try FileManager.default.removeItem(atPath: localFilePath)
+                        print("[DownloadView] 左滑删除 - 已删除本地文件: \(localFilePath)")
+                    } catch {
+                        print("[DownloadView] 左滑删除 - 删除本地文件失败: \(error.localizedDescription)")
+                    }
+                }
+                
+                NotificationCenter.default.post(name: NSNotification.Name("ForceRefreshUI"), object: nil)
+            }
+        )
+
+        return actions
+    }
+
+    private func shareIPAFile(path: String, name: String) {
+        print("[DownloadView] 分享文件: \(name), 路径: \(path)")
+
+        guard FileManager.default.fileExists(atPath: path) else {
+            print("[DownloadView] 分享失败: 文件不存在: \(path)")
+            return
+        }
+
+        let fileURL = URL(fileURLWithPath: path)
+
+        #if canImport(UIKit)
+        guard let topViewController = getTopViewController() else {
+            print("[DownloadView] 分享失败: 无法获取顶层视图控制器")
+            return
+        }
+
+        let activityViewController = UIActivityViewController(
+            activityItems: [fileURL],
+            applicationActivities: nil
+        )
+
+        activityViewController.title = name
+
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            activityViewController.popoverPresentationController?.sourceView = topViewController.view
+            activityViewController.popoverPresentationController?.sourceRect = CGRect(
+                x: topViewController.view.bounds.midX,
+                y: topViewController.view.bounds.midY,
+                width: 0,
+                height: 0
+            )
+            activityViewController.popoverPresentationController?.permittedArrowDirections = []
+        }
+
+        topViewController.present(activityViewController, animated: true)
+        #endif
+    }
+
+    private func getTopViewController() -> UIViewController? {
+        #if canImport(UIKit)
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) else {
+            return nil
+        }
+
+        var topController = keyWindow.rootViewController
+        while let presentedViewController = topController?.presentedViewController {
+            topController = presentedViewController
+        }
+        return topController
+        #else
+        return nil
+        #endif
     }
 
     private var emptyStateView: some SwiftUI.View {
@@ -1093,7 +1171,7 @@ struct DownloadView: SwiftUI.View {
                             )
                         )
                 )
-                .shadow(color: Color.blue.opacity(0.3), radius: 8, x: 0, y: 4)
+                .shadow(color: colorScheme == .dark ? Color.blue.opacity(0.5) : Color.blue.opacity(0.3), radius: colorScheme == .dark ? 12 : 8, x: 0, y: 4)
             }
             .buttonStyle(PlainButtonStyle())
 
@@ -1157,9 +1235,114 @@ struct DownloadView: SwiftUI.View {
 }
 
 
+struct DownloadScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+struct CustomProgressView: SwiftUI.View {
+    let progress: Double
+    var height: CGFloat = 4
+    var cornerRadius: CGFloat = 2
+    var color: Color = .blue
+
+    var body: some SwiftUI.View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color(.systemGray5))
+                    .frame(height: height)
+
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(color)
+                    .frame(width: geometry.size.width * CGFloat(max(0, min(1, progress))), height: height)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+struct DownloadProgressView: SwiftUI.View {
+    let progress: Double
+    let status: DownloadStatus
+    let error: String?
+    let accentColor: Color
+    
+    private var progressLabel: String {
+        switch status {
+        case .waiting:
+            return "download_waiting".localized
+        case .downloading:
+            return "downloading".localized
+        case .paused:
+            return "download_paused".localized
+        case .completed:
+            return "download_completed".localized
+        case .failed:
+            return "download_failed".localized
+        case .cancelled:
+            return "download_cancelled".localized
+        }
+    }
+    
+    private var progressColor: Color {
+        switch status {
+        case .waiting, .paused:
+            return .orange
+        case .downloading, .completed:
+            return accentColor
+        case .failed:
+            return .red
+        case .cancelled:
+            return .gray
+        }
+    }
+    
+    var body: some SwiftUI.View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Text(progressLabel)
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                if status != .failed && status != .cancelled {
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(accentColor)
+                }
+            }
+
+            CustomProgressView(
+                progress: progress,
+                height: 4,
+                cornerRadius: 2,
+                color: progressColor
+            )
+
+            if let error = error, !error.isEmpty {
+                HStack {
+                    Text(error)
+                        .font(.system(size: 12))
+                        .foregroundColor(.red)
+                        .lineLimit(2)
+
+                    Spacer()
+                }
+            }
+        }
+    }
+}
+
+
 struct DownloadCardView: SwiftUI.View {
     @ObservedObject var request: DownloadRequest
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject var themeManager: ThemeManager
+    var isPreview: Bool = false
 
 
     @State private var showDetailView = false
@@ -1169,255 +1352,235 @@ struct DownloadCardView: SwiftUI.View {
     @State private var isInstalling = false
     @State private var installationProgress: Double = 0.0
     @State private var installationMessage: String = ""
-
-
-    private var buttonGradientColors: [Color] {
-        if isInstalling {
-            return [Color.gray, Color.gray.opacity(0.8)]
-        } else {
-            return [Color.green, Color.green.opacity(0.8)]
-        }
+    
+    private var progress: Double {
+        request.runtime.progressValue
+    }
+    
+    private var status: DownloadStatus {
+        request.runtime.status
     }
 
-    private var buttonShadowColor: Color {
-        if isInstalling {
-            return Color.gray.opacity(0.3)
-        } else {
-            return Color.green.opacity(0.3)
-        }
-    }
+
+
 
     var body: some SwiftUI.View {
-        ModernCard {
-            VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
+            topSection
 
-                HStack(spacing: 16) {
-
-                    CachedAsyncImage(url: request.package.iconURL) {
-                        Image(systemName: "app.fill")
-                    }
-                    .frame(width: 50, height: 50)
-                    .cornerRadius(10)
-
-
-                    VStack(alignment: .leading, spacing: 4) {
-
-                        Text(request.package.name)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-
-
-                        Text(request.package.bundleIdentifier)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-
-
-                        Text(String(format: "version_x".localized, request.version))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-
-
-                        if let localFilePath = request.localFilePath {
-                            if let fileSize = getFileSize(path: localFilePath) {
-                                Text(String(format: "file_size_x".localized, fileSize))
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-
-                    Spacer()
-
-
-                    VStack(spacing: 4) {
-
-                        Button(action: {
-                            deleteDownload()
-                        }) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.red)
-                                .frame(width: 24, height: 24)
-                                .background(
-                                    Circle()
-                                        .fill(Color.red.opacity(0.1))
-                                )
-                        }
-                        .buttonStyle(PlainButtonStyle())
-
-
-                        if request.runtime.status == DownloadStatus.completed,
-                           let localFilePath = request.localFilePath {
-                            Button(action: {
-                                shareIPAFile(path: localFilePath)
-                            }) {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.blue)
-                                    .frame(width: 24, height: 24)
-                                    .background(
-                                        Circle()
-                                            .fill(Color.blue.opacity(0.1))
-                                    )
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
-                    }
-                }
-
-
-                if request.runtime.status == DownloadStatus.downloading ||
-                   request.runtime.status == DownloadStatus.waiting ||
-                   request.runtime.status == DownloadStatus.paused ||
-                   request.runtime.progressValue >= 0 {
-                    progressView
-                }
-
-
-                if isInstalling {
-                }
-
-
-                actionButtons
-            }
-            .padding(16)
-        }
-    }
-
-
-    private var actionButtons: some SwiftUI.View {
-        VStack(spacing: 8) {
-
-            HStack(spacing: 8) {
-
-                if request.runtime.status == DownloadStatus.downloading ||
-                   request.runtime.status == DownloadStatus.waiting ||
-                   request.runtime.status == DownloadStatus.paused {
-                    Button(action: {
-                        cancelDownload()
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "xmark.circle.fill")
-                            Text("cancel".localized)
-                        }
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                }
-
-
-                if request.runtime.status == DownloadStatus.failed {
-                    if isUnpurchasedAppError() {
-
-                        Button(action: {
-                            openAppStore()
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "app.badge")
-                                Text("no_purchase_record".localized)
-                            }
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.blue)
-                    } else {
-
-                        Button(action: {
-                            retryDownload()
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.clockwise")
-                                Text("retry".localized)
-                            }
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                    }
-                }
-
-                Spacer()
+            if shouldShowProgress {
+                ECGDownloadProgressView(
+                    progress: progress,
+                    status: status,
+                    error: request.runtime.error,
+                    accentColor: themeManager.accentColor
+                )
             }
 
-
-            if request.runtime.status == DownloadStatus.completed {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.caption)
-
-                        Text("file_saved_to".localized)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-
-                        Spacer()
-
-
-                        if request.localFilePath != nil {
-                            Button(action: {
-                                startInstallation(for: request)
-                            }) {
-                                HStack(spacing: 6) {
-                                    if isInstalling {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                            .scaleEffect(0.8)
-                                    } else {
-                                        Image(systemName: "arrow.up.circle.fill")
-                                            .font(.system(size: 16, weight: .semibold))
-                                            .foregroundColor(.white)
-                                    }
-
-                                    Text(isInstalling ? "preparing".localized : "start_install".localized)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundColor(.white)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(
-                                    LinearGradient(
-                                        colors: buttonGradientColors,
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .cornerRadius(10)
-                                .shadow(color: buttonShadowColor, radius: 4, x: 0, y: 2)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .disabled(isInstalling)
-                        }
-                    }
-
-                    Text(request.localFilePath ?? "unknown_path".localized)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .padding(.leading, 16)
-                }
-                .padding(.horizontal, 4)
+            if status == DownloadStatus.completed {
+                completedStatusView
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.secondarySystemGroupedBackground))
+                .shadow(
+                    color: colorScheme == .dark ? Color.black.opacity(0.4) : Color.black.opacity(0.08),
+                    radius: colorScheme == .dark ? 10 : 6,
+                    x: 0,
+                    y: 2
+                )
+        )
+        .contentShape(Rectangle())
         .onTapGesture {
             handleCardTap()
         }
+        .id(request.id)
     }
+
+    private var shouldShowProgress: Bool {
+        request.runtime.status == DownloadStatus.downloading ||
+        request.runtime.status == DownloadStatus.waiting ||
+        request.runtime.status == DownloadStatus.paused ||
+        request.runtime.progressValue >= 0
+    }
+
+    private var topSection: some SwiftUI.View {
+        HStack(alignment: .top, spacing: 12) {
+            appIconView
+            appInfoView
+            Spacer(minLength: 8)
+            actionButtonView
+        }
+    }
+
+    private var appIconView: some SwiftUI.View {
+        Group {
+            if let iconURL = request.package.iconURL, let url = URL(string: iconURL) {
+                ArtworkView(
+                    url: url,
+                    aspectRatio: 1,
+                    contentMode: .fill,
+                    cornerRadius: 14,
+                    showsBorder: true,
+                    loadingAnimation: !isPreview,
+                    isPreview: isPreview
+                )
+                .frame(width: 64, height: 64)
+            } else {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(.systemGray5))
+                    .overlay(
+                        Image(systemName: "app.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(.secondary)
+                    )
+                    .frame(width: 64, height: 64)
+            }
+        }
+    }
+
+    private var appInfoView: some SwiftUI.View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(request.package.name)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+
+            Text(request.package.bundleIdentifier)
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            Text(String(format: "version_x".localized, request.version))
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            if let localFilePath = request.localFilePath {
+                if let fileSize = getFileSize(path: localFilePath) {
+                    Text(String(format: "file_size_x".localized, fileSize))
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var actionButtonView: some SwiftUI.View {
+        primaryActionButton
+    }
+
+    @ViewBuilder
+    private var primaryActionButton: some SwiftUI.View {
+        switch request.runtime.status {
+        case .downloading, .waiting, .paused:
+            Button(action: {
+                cancelDownload()
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("cancel".localized)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundColor(themeManager.accentColor)
+                .frame(width: 84, height: 36)
+                .background(
+                    Capsule()
+                        .fill(themeManager.accentColor.opacity(0.12))
+                )
+            }
+            .buttonStyle(PlainButtonStyle())
+
+        case .failed:
+            Button(action: {
+                retryDownload()
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("retry".localized)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundColor(.orange)
+                .frame(width: 84, height: 36)
+                .background(
+                    Capsule()
+                        .fill(Color.orange.opacity(0.12))
+                )
+            }
+            .buttonStyle(PlainButtonStyle())
+
+        case .completed:
+            if request.localFilePath != nil {
+                Button(action: {
+                    startInstallation(for: request)
+                }) {
+                    HStack(spacing: 6) {
+                        if isInstalling {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        Text(isInstalling ? "installing".localized : "install".localized)
+                            .font(.system(size: 15, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(width: 96, height: 40)
+                    .background(
+                        LinearGradient(
+                            colors: [themeManager.accentColor, themeManager.accentColor.opacity(0.85)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: themeManager.accentColor.opacity(0.4), radius: 8, x: 0, y: 4)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(isInstalling)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.system(size: 24))
+            }
+
+        case .cancelled:
+            Image(systemName: "xmark.circle")
+                .foregroundColor(.gray)
+                .font(.system(size: 20))
+        }
+    }
+
+    private var completedStatusView: some SwiftUI.View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.caption)
+
+                Text("file_saved_to".localized)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+
+            Text(request.localFilePath ?? "unknown_path".localized)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+
+
 
 
     private func handleCardTap() {
@@ -1510,43 +1673,37 @@ struct DownloadCardView: SwiftUI.View {
 
 
     private var progressView: some SwiftUI.View {
-        VStack(spacing: 4) {
-            HStack {
-                Label(getProgressLabel(), systemImage: getProgressIcon())
-                    .font(.headline)
-                    .foregroundColor(getProgressColor())
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Text(getProgressLabel())
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
 
                 Spacer()
 
                 if request.runtime.status != .failed && request.runtime.status != .cancelled {
                     Text("\(Int(request.runtime.progressValue * 100))%")
-                        .font(.title2)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(themeManager.accentColor)
                 }
             }
 
-            ProgressView(value: request.runtime.progressValue)
-                .progressViewStyle(LinearProgressViewStyle(tint: getProgressColor()))
-                .scaleEffect(y: 2.0)
+            CustomProgressView(
+                progress: request.runtime.progressValue,
+                height: 4,
+                cornerRadius: 2,
+                color: themeManager.accentColor
+            )
 
             if let error = request.runtime.error, !error.isEmpty {
                 HStack {
                     Text(error)
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundColor(.red)
                         .lineLimit(2)
 
                     Spacer()
                 }
-                .padding(.top, 2)
-            }
-
-            HStack {
-                Spacer()
-
-                Text(request.createdAt.formatted())
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         }
     }

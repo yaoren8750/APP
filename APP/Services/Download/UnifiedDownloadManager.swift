@@ -11,6 +11,34 @@ class UnifiedDownloadManager: ObservableObject, @unchecked Sendable {
     @Published var activeDownloads: Set<UUID> = []
     @Published var waitingDownloads: Set<UUID> = []
 
+    var sortedDownloadRequests: [DownloadRequest] {
+        downloadRequests.sorted { req1, req2 in
+            let priority1 = downloadPriority(for: req1)
+            let priority2 = downloadPriority(for: req2)
+            if priority1 != priority2 {
+                return priority1 > priority2
+            }
+            return req1.createdAt > req2.createdAt
+        }
+    }
+
+    private func downloadPriority(for request: DownloadRequest) -> Int {
+        switch request.runtime.status {
+        case .downloading:
+            return 4
+        case .waiting:
+            return 3
+        case .paused:
+            return 2
+        case .failed:
+            return 1
+        case .cancelled:
+            return 1
+        case .completed:
+            return 0
+        }
+    }
+
     var maxConcurrentDownloads: Int = 3
 
     private let downloadManager = AppStoreDownloadManager.shared
@@ -245,7 +273,8 @@ class UnifiedDownloadManager: ObservableObject, @unchecked Sendable {
                 dsPersonId: account.storeResponse.directoryServicesIdentifier,
                 cookies: account.cookies,
                 countryCode: account.countryCode,
-                storeResponse: account.storeResponse
+                storeResponse: account.storeResponse,
+                deviceGUID: account.deviceGUID
             )
 
             let isValid = await AuthenticationManager.shared.validateAccount(storeAccount)

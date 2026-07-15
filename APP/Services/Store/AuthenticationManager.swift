@@ -161,7 +161,8 @@ class AuthenticationManager: @unchecked Sendable {
             dsPersonId: account.dsPersonId,
             cookies: getCurrentCookies(),
             countryCode: account.countryCode,
-            storeResponse: account.storeResponse
+            storeResponse: account.storeResponse,
+            deviceGUID: account.deviceGUID
         )
 
         do {
