@@ -23,7 +23,7 @@ struct SwipeActionsModifier: ViewModifier {
             
             content
                 .offset(x: offset)
-                .overlay(
+                .background(
                     SwipeGestureView(
                         onSwipeChange: { translation in
                             if translation < 0 {

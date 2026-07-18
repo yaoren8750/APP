@@ -970,24 +970,63 @@ struct DownloadView: SwiftUI.View {
     }
 
     var downloadManagementSegmentView: some SwiftUI.View {
-        ScrollView(.vertical, showsIndicators: true) {
-            LazyVStack(spacing: 10) {
-                Spacer(minLength: 12)
-
+        List {
+            Group {
                 if vm.downloadRequests.isEmpty {
                     emptyStateView
                         .scaleEffect(animateCards ? 1 : 0.9)
                         .opacity(animateCards ? 1 : 0)
                         .animation(.spring().delay(0.1), value: animateCards)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                        .padding(.top, 40)
                 } else {
-                    downloadRequestsView
+                    ForEach(vm.sortedDownloadRequests.indices, id: \.self) { index in
+                        let request = vm.sortedDownloadRequests[index]
+                        DownloadCardView(
+                            request: request,
+                            isPreview: isScrollingFast
+                        )
+                        .scaleEffect(animateCards ? 1 : 0.9)
+                        .opacity(animateCards ? 1 : 0)
+                        .animation(Animation.spring().delay(Double(index) * 0.1), value: animateCards)
+                        .animation(nil, value: isScrollingFast)
+                        .id(request.id)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if request.runtime.status == .completed,
+                               let localFilePath = request.localFilePath,
+                               FileManager.default.fileExists(atPath: localFilePath) {
+                                Button {
+                                    shareIPAFile(path: localFilePath, name: request.package.name)
+                                } label: {
+                                    Label("share".localized, systemImage: "square.and.arrow.up")
+                                }
+                                .tint(.blue)
+                            }
+                            
+                            Button(role: .destructive) {
+                                UnifiedDownloadManager.shared.deleteDownload(request: request)
+                                UnifiedDownloadManager.shared.saveDownloadTasks()
+                                
+                                if let localFilePath = request.localFilePath, FileManager.default.fileExists(atPath: localFilePath) {
+                                    do {
+                                        try FileManager.default.removeItem(atPath: localFilePath)
+                                        print("[DownloadView] 左滑删除 - 已删除本地文件: \(localFilePath)")
+                                    } catch {
+                                        print("[DownloadView] 左滑删除 - 删除本地文件失败: \(error.localizedDescription)")
+                                    }
+                                }
+                                
+                                NotificationCenter.default.post(name: NSNotification.Name("ForceRefreshUI"), object: nil)
+                            } label: {
+                                Label("delete".localized, systemImage: "trash")
+                            }
+                        }
+                    }
                 }
-
-                Spacer(minLength: 65)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 20)
             .background(
                 GeometryReader { geometry in
                     Color.clear
@@ -997,6 +1036,11 @@ struct DownloadView: SwiftUI.View {
             .onPreferenceChange(DownloadScrollOffsetPreferenceKey.self) { value in
                 detectScrollVelocity(offset: value)
             }
+        }
+        .listStyle(.plain)
+        .background(Color.clear)
+        .onAppear {
+            UITableView.appearance().backgroundColor = .clear
         }
         .coordinateSpace(name: "downloadScroll")
         .refreshable {
@@ -1028,66 +1072,6 @@ struct DownloadView: SwiftUI.View {
     }
 
 
-
-    private var downloadRequestsView: some SwiftUI.View {
-        ForEach(vm.sortedDownloadRequests.indices, id: \.self) { index in
-            let request = vm.sortedDownloadRequests[index]
-            DownloadCardView(
-                request: request,
-                isPreview: isScrollingFast
-            )
-            .scaleEffect(animateCards ? 1 : 0.9)
-            .opacity(animateCards ? 1 : 0)
-            .animation(Animation.spring().delay(Double(index) * 0.1), value: animateCards)
-            .animation(nil, value: isScrollingFast)
-            .id(request.id)
-            .swipeActions(
-                makeSwipeActions(for: request)
-            )
-        }
-    }
-
-    private func makeSwipeActions(for request: DownloadRequest) -> [SwipeAction] {
-        var actions: [SwipeAction] = []
-
-        if request.runtime.status == .completed,
-           let localFilePath = request.localFilePath,
-           FileManager.default.fileExists(atPath: localFilePath) {
-            actions.append(
-                SwipeAction(
-                    title: "share".localized,
-                    systemImage: "square.and.arrow.up",
-                    backgroundColor: .blue
-                ) {
-                    shareIPAFile(path: localFilePath, name: request.package.name)
-                }
-            )
-        }
-
-        actions.append(
-            SwipeAction(
-                title: "delete".localized,
-                systemImage: "trash",
-                backgroundColor: .red
-            ) {
-                UnifiedDownloadManager.shared.deleteDownload(request: request)
-                UnifiedDownloadManager.shared.saveDownloadTasks()
-                
-                if let localFilePath = request.localFilePath, FileManager.default.fileExists(atPath: localFilePath) {
-                    do {
-                        try FileManager.default.removeItem(atPath: localFilePath)
-                        print("[DownloadView] 左滑删除 - 已删除本地文件: \(localFilePath)")
-                    } catch {
-                        print("[DownloadView] 左滑删除 - 删除本地文件失败: \(error.localizedDescription)")
-                    }
-                }
-                
-                NotificationCenter.default.post(name: NSNotification.Name("ForceRefreshUI"), object: nil)
-            }
-        )
-
-        return actions
-    }
 
     private func shareIPAFile(path: String, name: String) {
         print("[DownloadView] 分享文件: \(name), 路径: \(path)")
@@ -1494,55 +1478,53 @@ struct DownloadCardView: SwiftUI.View {
             EmptyView()
 
         case .failed, .cancelled:
-            Button(action: {
-                retryDownload()
-            }) {
-                HStack(spacing: 3) {
-                    Text("🔄")
-                        .font(.system(size: 13))
-                    Text("retry".localized)
-                        .font(.system(size: 13, weight: .semibold))
-                }
-                .foregroundColor(.orange)
-                .frame(width: 76, height: 32)
-                .background(
-                    Capsule()
-                        .fill(Color.orange.opacity(0.12))
-                )
+            HStack(spacing: 3) {
+                Text("🔄")
+                    .font(.system(size: 13))
+                Text("retry".localized)
+                    .font(.system(size: 13, weight: .semibold))
             }
-            .buttonStyle(PlainButtonStyle())
+            .foregroundColor(.orange)
+            .frame(width: 76, height: 32)
+            .background(
+                Capsule()
+                    .fill(Color.orange.opacity(0.12))
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                retryDownload()
+            }
 
         case .completed:
             if request.localFilePath != nil {
-                Button(action: {
-                    startInstallation(for: request)
-                }) {
-                    HStack(spacing: 4) {
-                        if isInstalling {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.7)
-                        } else {
-                            Text("📦")
-                                .font(.system(size: 14))
-                        }
-                        Text(isInstalling ? "installing".localized : "install".localized)
-                            .font(.system(size: 13, weight: .bold))
+                HStack(spacing: 4) {
+                    if isInstalling {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.7)
+                    } else {
+                        Text("📦")
+                            .font(.system(size: 14))
                     }
-                    .foregroundColor(.white)
-                    .frame(width: 84, height: 34)
-                    .background(
-                        LinearGradient(
-                            colors: [themeManager.accentColor, themeManager.accentColor.opacity(0.85)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(Capsule())
-                    .shadow(color: themeManager.accentColor.opacity(0.4), radius: 6, x: 0, y: 3)
+                    Text(isInstalling ? "installing".localized : "install".localized)
+                        .font(.system(size: 13, weight: .bold))
                 }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(isInstalling)
+                .foregroundColor(.white)
+                .frame(width: 84, height: 34)
+                .background(
+                    LinearGradient(
+                        colors: [themeManager.accentColor, themeManager.accentColor.opacity(0.85)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(Capsule())
+                .shadow(color: themeManager.accentColor.opacity(0.4), radius: 6, x: 0, y: 3)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !isInstalling else { return }
+                    startInstallation(for: request)
+                }
             } else {
                 Text("✅")
                     .font(.system(size: 20))
